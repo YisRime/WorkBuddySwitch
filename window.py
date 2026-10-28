@@ -276,8 +276,8 @@ class Window(object):
                  columns=("name", "checkin", "streak", "energy", "credit", "expires"),
                  titles={"name": "账号", "checkin": "签到", "streak": "连登",
                          "energy": "能量", "credit": "积分", "expires": "最早到期"},
-                 widths={"name": 140, "checkin": 56, "streak": 50,
-                         "energy": 50, "credit": 66, "expires": 132},
+                 widths={"name": 150, "checkin": 54, "streak": 50,
+                         "energy": 50, "credit": 62, "expires": 196},
                  actions=(("收录", "import_current"), ("恢复", "restore_backup"),
                           ("刷新", "reload"), ("续期", "refresh_credential"),
                           ("获取", "query_activity"), ("签到", "do_checkin"),
@@ -287,8 +287,8 @@ class Window(object):
                  columns=("name", "credit", "packages", "expires", "slots"),
                  titles={"name": "账号", "credit": "积分", "packages": "包数",
                          "expires": "到期", "slots": "登录槽位"},
-                 widths={"name": 168, "credit": 74, "packages": 62,
-                         "expires": 138, "slots": 108},
+                 widths={"name": 152, "credit": 68, "packages": 56,
+                         "expires": 196, "slots": 96},
                  actions=(("收录", "import_current"), ("恢复", "restore_backup"),
                           ("刷新", "reload"), ("续期", "refresh_credential"),
                           ("获取", "query_activity"), ("同步", "sync_current"),
@@ -391,8 +391,8 @@ class Window(object):
         page.widgets["pack_summary"].pack(side="right")
         pack_cols = ("pname", "remain", "size", "days")
         pack_tree = ttk.Treeview(packs, columns=pack_cols, show="headings", height=6)
-        for col, text, width in (("pname", "包", 148), ("remain", "剩余", 56),
-                                 ("size", "总量", 56), ("days", "到期", 148)):
+        for col, text, width in (("pname", "包", 136), ("remain", "剩余", 54),
+                                 ("size", "总量", 54), ("days", "到期", 196)):
             pack_tree.heading(col, text=text, anchor="w" if col == "pname" else "center")
             pack_tree.column(col, width=width, minwidth=50,
                              anchor="w" if col == "pname" else "center",
@@ -698,7 +698,7 @@ class Window(object):
 
     @classmethod
     def _expire_text(cls, row):
-        """到期文案：按月刷新的额度直接写月底日期，其余沿用刷新时的天数。"""
+        """到期文案：时间精确到秒，按月刷新的额度直接写月底时间，其余沿用刷新时的天数。"""
         if row.get("is_expired"):
             return "已过期"
         if monthly(row):
@@ -706,8 +706,8 @@ class Window(object):
             if not stamp:
                 return "—"
             days = (stamp - time.time()) / 86400.0
-            return "%s (%.1f 天)" % (time.strftime("%Y-%m-%d", time.localtime(stamp)), days)
-        when = str(row.get("expire_time") or row.get("cycle_end_time") or "")[:10]
+            return "%s (%.1f 天)" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stamp)), days)
+        when = str(row.get("expire_time") or row.get("cycle_end_time") or "")[:19]
         if not when:
             return "—"
         try:
@@ -725,7 +725,7 @@ class Window(object):
         else:
             stamp = norm_ts(entry.expires_at)
             try:
-                expires = (time.strftime("%Y-%m-%d %H:%M", time.localtime(stamp))
+                expires = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stamp))
                            if stamp > 0 else "—")
             except (OSError, ValueError, OverflowError):
                 expires = "—"
