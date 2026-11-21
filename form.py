@@ -137,15 +137,18 @@ class _Dialog(object):
             widget.pack(fill="both", expand=True)
             self.entries[key] = ("text", widget)
         else:
+            line = tk.Frame(box, bg=cfg["panel"])
+            line.pack(fill="x")
             var = tk.StringVar(value=str(item.get("value") or ""))
-            widget = ttk.Entry(box, textvariable=var, width=width,
+            widget = ttk.Entry(line, textvariable=var, width=width,
                                font=("Microsoft YaHei UI", 9),
                                show="*" if item.get("secret") else "")
-            widget.pack(fill="x")
+            widget.pack(side="left", fill="x", expand=True)
+            for text, callback in item.get("buttons") or ():
+                ttk.Button(line, text=text,
+                           command=lambda fn=callback: self._extra(fn)).pack(
+                    side="left", padx=(6, 0))
             self.entries[key] = ("entry", var)
-        if item.get("hint"):
-            tk.Label(box, text=item["hint"], bg=cfg["panel"], fg=cfg["dim"],
-                     font=("Microsoft YaHei UI", 8), anchor="w").pack(fill="x")
         return row + 1
 
     def _center(self, root):

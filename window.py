@@ -1415,14 +1415,12 @@ class Window(object):
 
         def buy(form):
             """接码：租号 → 发码 → 等码 → 校验，全过程走接码平台。"""
-            values_now = form.values()
-            token = str(values_now.get("sms_token") or "").strip()
+            token = str(form.values().get("sms_token") or "").strip()
             if not token:
                 form.note("先填接码 token")
                 return
-            Prefs.save_sms(token=token,
-                           base="https://www.jichisms.com",
-                           project_id=str(values_now.get("sms_project") or "139372"))
+            Prefs.save_sms(token=token, base="https://www.jichisms.com",
+                           project_id="139372")
             form.note("正在租号…")
 
             def work():
@@ -1440,15 +1438,13 @@ class Window(object):
 
         values = Form.open(
             self.root, "注册 / 登录",
-            [{"key": "mobile", "label": "手机号", "hint": "国内 11 位"},
-             {"key": "code", "label": "验证码"},
+            [{"key": "mobile", "label": "手机号", "buttons": (("浏览器登录", relay),)},
+             {"key": "code", "label": "验证码",
+              "buttons": (("发送验证码", send), ("接码注册", buy))},
              {"key": "sms_token", "label": "接码 token", "secret": True,
               "value": Prefs.sms().get("token") or ""},
-             {"key": "sms_project", "label": "接码项目",
-              "value": Prefs.sms().get("project_id") or ""},
              {"key": "daily", "label": "注册后跑日常", "choices": ["否", "是"], "value": "否"}],
-            note="验证码由腾讯发给账号本人。", submit="登录并收录",
-            buttons=(("发送验证码", send), ("浏览器登录", relay), ("接码注册", buy)))
+            submit="登录")
         if self.signup_row is not None:
             row = self.signup_row
             self.signup_row = None
@@ -1497,9 +1493,7 @@ class Window(object):
             return
         text, path = "", ""
         if mode.startswith("粘贴"):
-            text = Form.text(self.root, "粘贴账号", "内容",
-                             note="合集包、JSON 数组、JSONL（一行一个凭证）、CSV 与每行 "
-                                  "token 都认。")
+            text = Form.text(self.root, "粘贴账号", "内容")
             if not text:
                 return
         elif mode.startswith("选择"):
@@ -1551,11 +1545,9 @@ class Window(object):
         values = Form.open(
             self.root, "导出账号",
             [{"key": "fmt", "label": "格式",
-              "choices": ["jsonl", "json", "csv", "txt", "zip", "info"], "value": "jsonl",
-              "hint": "jsonl = 一行一个客户端 .info，别的工具能直接导入"},
+              "choices": ["jsonl", "json", "csv", "txt", "zip", "info"], "value": "jsonl"},
              {"key": "redact", "label": "脱敏", "choices": ["否", "是"], "value": "否"}],
-            note="默认导出选中（没选中就全部）；脱敏会打码 token / 昵称 / uid，"
-                 "适合截图或发给别人。")
+            note="")
         if not values:
             return
         fmt = str(values.get("fmt") or "jsonl")
