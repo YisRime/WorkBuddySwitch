@@ -506,20 +506,6 @@ class Snapshot:
                 Snapshot.resume(running, log)
             raise
 
-    @classmethod
-    @contextlib.contextmanager
-    def guarded(cls, dest_dir, log=None):
-        """先备份，块内失败自动回滚。"""
-        cls.save(dest_dir, log=log)
-        try:
-            yield
-        except Exception:
-            try:
-                cls.restore(dest_dir, restart=False, log=log)
-            except Exception:
-                pass
-            raise
-
     @staticmethod
     def resume(running, log):
         """异常回滚：原本在运行、现在却没进程了，就试着把客户端拉回来。"""

@@ -18,7 +18,7 @@ import os
 import sys
 import time
 
-from util import DATA, as_dict, norm_ts
+from util import DATA, norm_ts
 
 INPUT_KEYS = ("inputTokens", "input_tokens", "prompt_tokens", "promptTokens")
 OUTPUT_KEYS = ("outputTokens", "output_tokens", "completion_tokens", "completionTokens")

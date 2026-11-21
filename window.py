@@ -1,7 +1,7 @@
 """主窗口：单页账号表 + 右侧控制卡 + 共用日志。
 
 表格按区域筛（国内版 / 国际版两个 chip），十个按钮里「账号」「实例」各自开一块二级
-面板（panel.py），其余直接对选中或本页账号执行。除输入表单（form.py）与这两块面板，
+面板（panel.py），其余直接对选中或本页账号执行。除这两块面板（panel.py），
 没有别的窗口：确认、进度、结果、错误全部实时写进日志。
 PAD / GAP / COLS / SIDE_W / BTN_PAD 是控制区网格的尺寸约定：卡片左右边距、按钮间隙、
 列数、右栏宽度与按钮留白。
@@ -20,7 +20,6 @@ from tkinter import filedialog, ttk
 from api import Activity, Growth
 from bulk import Bulk
 from client import Client, Switcher
-from form import Form
 from ide import Ide
 from panel import Panel
 from signup import Signup
@@ -319,10 +318,10 @@ class Window(object):
                  widths={"name": 132, "realm": 54, "state": 56, "checkin": 52,
                          "streak": 46, "energy": 46, "credit": 58, "expires": 176},
                  actions=(("账号", "do_account"), ("实例", "do_slots"),
-                          ("获取", "query_activity"), ("签到", "do_checkin"),
+                          ("导入", "import_current"), ("获取", "query_activity"),
+                          ("试用", "do_trial"), ("签到", "do_checkin"),
                           ("活跃", "do_report"), ("任务", "do_tasks"),
-                          ("旅行", "do_travel"), ("管家", "do_streak"),
-                          ("试用", "do_trial"), ("导入", "import_current"))),
+                          ("旅行", "do_travel"), ("管家", "do_streak"))),
         )
         for spec in defs:
             self.pages[spec.realm] = spec
@@ -457,21 +456,6 @@ class Window(object):
         if tree.selection() and tree.identify_region(event.x, event.y) == "nothing":
             tree.selection_remove(*tree.selection())
 
-    def _current_line(self, parent, row, tag, font, fg, command, hint):
-        """控制区里的一行当前登录：槽位名、账号摘要、行尾「切换」（与按钮网格对齐）。"""
-        tk.Label(parent, text=tag, bg=Theme.PANEL, fg=Theme.DIM,
-                 font=(FONT, 9), anchor="w").grid(row=row, column=0, sticky="w",
-                                                  padx=BTN_PAD, pady=(GAP, 0))
-        lbl = tk.Label(parent, text="读取中…", bg=Theme.PANEL, fg=fg, font=font,
-                       anchor="w")
-        lbl.grid(row=row, column=1, columnspan=COLS - 2, sticky="w",
-                 padx=BTN_PAD, pady=(GAP, 0))
-        btn = ttk.Button(parent, text="切换", style="Primary.TButton",
-                         command=command)
-        btn.grid(row=row, column=COLS - 1, sticky="ew", padx=BTN_PAD, pady=(GAP, 0))
-        self.tip(btn, hint)
-        return lbl, btn
-
     def _build_log(self, parent):
         """底部共用日志：带时间戳、按级别着色，超过 300 行自动裁掉前半。"""
         card = tk.Frame(parent, bg=Theme.PANEL, highlightthickness=1,
@@ -567,7 +551,7 @@ class Window(object):
                 return "默认 CLI 槽位只支持国际版账号；国内版请用「实例」新建"
             return "把默认 CLI 槽位的登录态换成 %s，下次启动 CLI 生效" % entry.nickname
         if action == "import_current":
-            return "把当前 GUI 登录态收录进账号库（已有账号只更新，不新建）"
+            return "把当前 GUI 登录态收进账号库（已有账号只更新，不新建）"
         if action == "reload":
             return "重新扫描 data/Account，刷新账号列表"
         if action == "sync_current":
@@ -1086,14 +1070,6 @@ class Window(object):
             self.slot_sel = ""
             self.slot_var.set("选择实例" if metas else "暂无实例")
 
-    def _on_slot_selected(self, _event=None):
-        """实例下拉换选后同步状态并刷新按钮。"""
-        label = self.slot_var.get()
-        self.slot_sel = next((meta["name"] for index, meta in enumerate(self.slot_metas)
-                              if index < len(self.slot_labels)
-                              and self.slot_labels[index] == label), "")
-        self._sync_buttons()
-
     def slot_meta(self):
         """下拉里选中的实例元数据。"""
         return next((m for m in self.slot_metas if m["name"] == self.slot_sel), None)
@@ -1401,19 +1377,14 @@ class Window(object):
                 getattr(self, name)()
             return callback
 
-        cn = sum(1 for entry in self.entries if entry.realm == "cn")
         panel = Panel(self.root, "账号", width=400)
-        panel.head([("国内", cn), ("国际", len(self.entries) - cn),
-                    ("GUI", self.current.get("nickname") or "未登录")])
-        panel.rule()
-        panel.field("手机号", "mobile", width=16,
-                    buttons=(("浏览器登录", relay),))
+        panel.field("手机号", "mobile", width=16, buttons=(("网页", relay),))
         panel.field("验证码", "code", width=16, buttons=(("发送", send),))
-        panel.field("接码 token", "sms_token", value=Prefs.sms().get("token") or "",
-                    secret=True, width=16, buttons=(("接码", buy),))
+        panel.field("接码", "sms_token", value=Prefs.sms().get("token") or "",
+                    secret=True, width=16, buttons=(("注册", buy),))
         panel.rule()
-        panel.grid((("登录", login), ("导入", pick("import_file")),
-                    ("导出", pick("do_export")), ("扫描", pick("scan_local"))),
+        panel.grid((("登录", login), ("扫描", pick("scan_local")),
+                    ("导入", pick("import_file")), ("导出", pick("do_export"))),
                    cols=4, primary=True)
         panel.wait()
 
@@ -1444,18 +1415,14 @@ class Window(object):
                 panel.close()
             return callback
 
-        running = sum(1 for meta in self.slot_metas if meta.get("pids"))
         index = next((i for i, meta in enumerate(self.slot_metas)
                       if meta.get("name") == self.slot_sel), -1)
         labels = self.slot_labels or ["（无实例）"]
         panel = Panel(self.root, "实例", width=470)
-        panel.head([("共", "%d 个" % len(self.slot_metas)), ("运行", running)])
-        panel.rule()
         panel.line("GUI", self.current.get("nickname") or "未登录",
                    (("切换", pick("gui")),))
         panel.line("CLI", self.cli_cur.get("nickname") or "未登录",
                    (("切换", pick("cli")),))
-        panel.rule()
         panel.field("实例", "slot", value=labels[index] if index >= 0 else "",
                     choices=labels, width=26,
                     buttons=(("换号", pick("switch")),))
@@ -1526,31 +1493,38 @@ class Window(object):
         self._run("扫描", work)
 
     def do_export(self):
-        """导出账号：选格式与脱敏，再选保存位置。"""
+        """导出账号：面板里选格式与脱敏，确定后再选保存位置。"""
         if self.busy:
             return
         targets = list(self.selected_all()) or list(self.entries)
         if not targets:
             self.log("没有可导出的账号", "warn")
             return
-        values = Form.open(
-            self.root, "导出账号",
-            [{"key": "fmt", "label": "格式",
-              "choices": ["jsonl", "json", "csv", "txt", "zip", "info"], "value": "jsonl"},
-             {"key": "redact", "label": "脱敏", "choices": ["否", "是"], "value": "否"}],
-            note="")
-        if not values:
-            return
+
+        def run(panel):
+            """收面板上的两个选项，关掉后把选文件排到下一轮。"""
+            values = panel.values()
+            panel.close()
+            self.root.after(0, lambda: self._export_to(values, targets))
+
+        panel = Panel(self.root, "导出", width=320)
+        panel.field("格式", "fmt", value="jsonl",
+                    choices=["jsonl", "json", "csv", "txt", "zip", "info"], width=14)
+        panel.field("脱敏", "redact", value="否", choices=["否", "是"], width=14)
+        panel.grid((("导出", run),), cols=1, primary=True)
+        panel.wait()
+
+    def _export_to(self, values, targets):
+        """选好文件后按格式与脱敏写盘。"""
         fmt = str(values.get("fmt") or "jsonl")
         redact = str(values.get("redact") or "否") == "是"
         if fmt == "info" and len(targets) != 1:
             self.log("单账号 .info 只能选中一个账号再导出", "warn")
             return
         default = "workbuddy-accounts-%s.%s" % (time.strftime("%Y%m%d-%H%M"), fmt)
-        folder = Prefs.export_dir()
         path = filedialog.asksaveasfilename(
             title="导出到", initialfile=default, defaultextension="." + fmt,
-            initialdir=folder or None,
+            initialdir=Prefs.export_dir() or None,
             filetypes=[(fmt, "*." + fmt), ("全部文件", "*.*")])
         if not path:
             return
@@ -1584,25 +1558,6 @@ class Window(object):
 
         self._run("用量", work)
 
-
-
-    def _post_signup(self, row):
-        """新账号收进来后按需跑一遍国内版日常：签到 → 猫咪旅行 → 成长任务。"""
-        if row.get("realm") != "cn" or row.get("enterpriseId"):
-            self.thread_log("国际版 / 企业号没有成长体系，跳过日常")
-            return
-        try:
-            Activity.checkin(row, log=self.thread_log)
-        except Exception as exc:
-            self.thread_log("签到失败：%s" % exc)
-        try:
-            Growth.travel(row)
-        except Exception as exc:
-            self.thread_log("猫咪旅行失败：%s" % exc)
-        try:
-            Growth.run(row, self.thread_log)
-        except Exception as exc:
-            self.thread_log("成长任务失败：%s" % exc)
 
 
     def _run(self, label, func):

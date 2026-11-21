@@ -19,11 +19,10 @@ import io
 import json
 import os
 import re
-import shutil
 import time
 import zipfile
 
-from util import (DATA, REALMS, CoreError, jwt_claims, jwt_exp, norm_ts, read_json,
+from util import (REALMS, CoreError, jwt_exp, norm_ts, read_json,
                   write_json)
 
 __all__ = ["Bulk", "points_to_token"]
@@ -581,64 +580,6 @@ class Bulk(object):
                 row["file"] = name
                 rows.append(row)
         return cls.dedupe(rows), notes
-
-    # ---------- 清理 ----------
-
-    @classmethod
-    def clean(cls, store, trash=None):
-        """扫描账号目录：坏 JSON、缺 uid、同 uid 重复文件都挪进回收目录。"""
-        folder = store.folder
-        trash = trash or os.path.join(DATA, ".trash", time.strftime("%Y%m%d-%H%M%S"))
-        problems, seen = [], {}
-        for name in sorted(os.listdir(folder)):
-            if not name.lower().endswith(".json"):
-                continue
-            path = os.path.join(folder, name)
-            if name.lower() in ("settings.json", "active_realm.json", "model_windows.json",
-                                "quota_scan.json"):
-                continue
-            try:
-                row = read_json(path)
-            except Exception as exc:
-                problems.append((path, "不是合法 JSON：%s" % exc))
-                continue
-            if not isinstance(row, dict) or not str(row.get("uid") or ""):
-                problems.append((path, "不是账号文件（缺 uid）"))
-                continue
-            uid = str(row["uid"])
-            best = seen.get(uid)
-            if best is None:
-                seen[uid] = path
-                continue
-
-            def score(item):
-                """同 uid 两份文件留哪份：凭证齐全、没过期、文件新的优先。"""
-                try:
-                    data = read_json(item)
-                except Exception:
-                    data = {}
-                usable = bool(data.get("accessToken")) + bool(data.get("refreshToken"))
-                stamp = norm_ts(data.get("expiresAt")) or jwt_exp(data.get("accessToken"))
-                fresh = 1 if not stamp or stamp > time.time() else 0
-                return (usable, fresh, os.path.getmtime(item))
-
-            if score(path) > score(best):
-                problems.append((best, "同 uid 重复文件，保留 %s" % name))
-                seen[uid] = path
-            else:
-                problems.append((path, "同 uid 重复文件，保留 %s" % os.path.basename(best)))
-        if not problems:
-            return {"moved": 0, "trash": trash, "items": []}
-        os.makedirs(trash, exist_ok=True)
-        moved = []
-        for path, why in problems:
-            try:
-                shutil.move(path, os.path.join(trash, os.path.basename(path)))
-                moved.append("%s：%s" % (os.path.basename(path), why))
-            except OSError as exc:
-                moved.append("%s：移动失败 %s" % (os.path.basename(path), exc))
-        return {"moved": len(moved), "trash": trash, "items": moved}
-
 
 def points_to_token(value):
     """值看着像 JWT / 长 token（用于在分隔符行里分辨哪一段是凭证）。"""
