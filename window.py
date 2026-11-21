@@ -541,9 +541,8 @@ class Window(object):
         self.menu.add_command(label="获取积分", command=self.query_activity)
         self.menu.add_separator()
         self.menu.add_command(label="账号面板…", command=self.do_account)
-        self.menu.add_command(label="导入文本…", command=self.import_text)
-        self.menu.add_command(label="从编辑器导入（VS Code / IDE / JetBrains）",
-                              command=self.import_ide)
+        self.menu.add_command(label="扫描本地登录态（客户端 / 编辑器）",
+                              command=self.scan_local)
         self.menu.add_command(label="导出账号…", command=self.do_export)
         self.menu.add_command(label="请求用量（本地会话）", command=self.do_usage)
         self.menu.add_separator()
@@ -1074,7 +1073,9 @@ class Window(object):
         for meta in metas:
             nick = meta.get("nickname") or (meta.get("uid") or "")[:8] or "?"
             label = meta["name"] if nick == meta["name"] else "%s · %s" % (meta["name"], nick)
-            labels.append("%s · %s" % (label, realm_label(meta.get("realm") or "intl")))
+            labels.append("%s · %s · %s" % (
+                label, realm_label(meta.get("realm") or "intl"),
+                "运行中" if meta.get("pids") else "已停止"))
         self.slot_labels = labels
         index = next((i for i, m in enumerate(metas) if m["name"] == self.slot_sel), -1)
         for box in self.slot_boxes.values():
@@ -1307,7 +1308,7 @@ class Window(object):
 
 
     def do_account(self):
-        """账号面板：一行状态、三行输入、两组动作，注册与导入导出同屏完成。"""
+        """账号面板：一行状态、三行输入、一行动作，注册与导入导出同屏完成。"""
         state = {"flow": None, "sending": False}
 
         def send(panel):
@@ -1394,7 +1395,7 @@ class Window(object):
                 Signup.verify(flow, code, log=self.thread_log)))
 
         def pick(name):
-            """先关面板，再开导入 / 导出。"""
+            """先关面板，再开导入 / 导出 / 扫描。"""
             def callback(panel):
                 panel.close()
                 getattr(self, name)()
@@ -1407,18 +1408,13 @@ class Window(object):
         panel.rule()
         panel.field("手机号", "mobile", width=16,
                     buttons=(("浏览器登录", relay),))
-        panel.field("验证码", "code", width=16,
-                    buttons=(("发送", send), ("接码", buy)))
+        panel.field("验证码", "code", width=16, buttons=(("发送", send),))
         panel.field("接码 token", "sms_token", value=Prefs.sms().get("token") or "",
-                    secret=True, width=16)
+                    secret=True, width=16, buttons=(("接码", buy),))
         panel.rule()
-        panel.grid((("登录", login), ("导出", pick("do_export"))), cols=2,
-                   primary=True)
-        panel.inline(
-            "导入", (("文本", pick("import_text")),
-                     ("文件", pick("import_file")),
-                     ("客户端", pick("import_client")),
-                     ("编辑器", pick("import_ide"))))
+        panel.grid((("登录", login), ("导入", pick("import_file")),
+                    ("导出", pick("do_export")), ("扫描", pick("scan_local"))),
+                   cols=4, primary=True)
         panel.wait()
 
     def _save_row(self, row):
@@ -1428,7 +1424,7 @@ class Window(object):
 
 
     def do_slots(self):
-        """实例面板：一行状态、一行实例选择、两行按钮，切槽位与启停都在这里。"""
+        """实例面板：两个登录槽位各一行，实例与换号一行，启停删除一行。"""
         pending = {"action": "", "slot": self.slot_sel}
 
         def meta_of(label):
@@ -1438,20 +1434,6 @@ class Window(object):
                 if index < len(self.slot_metas):
                     return self.slot_metas[index]
             return None
-
-        def brief(meta):
-            """一句现状：账号 · 区域 · 运行态。"""
-            if not meta:
-                return "暂无实例" if not self.slot_metas else "未选择"
-            return "%s · %s · %s" % (meta.get("nickname") or "无账号",
-                                     realm_label(meta.get("realm") or "intl"),
-                                     "运行中" if meta.get("pids") else "已停止")
-
-        def changed(label):
-            """下拉换选：跟着改右侧那句现状与记下的实例名。"""
-            meta = meta_of(label)
-            pending["slot"] = (meta or {}).get("name") or ""
-            panel.set_right(brief(meta))
 
         def pick(name):
             """记下要做的动作并关面板，动作回到面板外执行。"""
@@ -1463,21 +1445,22 @@ class Window(object):
             return callback
 
         running = sum(1 for meta in self.slot_metas if meta.get("pids"))
-        labels = self.slot_labels or ["（无实例）"]
         index = next((i for i, meta in enumerate(self.slot_metas)
                       if meta.get("name") == self.slot_sel), -1)
+        labels = self.slot_labels or ["（无实例）"]
         panel = Panel(self.root, "实例", width=470)
-        panel.head([("共", "%d 个" % len(self.slot_metas)), ("运行", running),
-                    ("GUI", self.current.get("nickname") or "未登录"),
-                    ("CLI", self.cli_cur.get("nickname") or "未登录")])
+        panel.head([("共", "%d 个" % len(self.slot_metas)), ("运行", running)])
+        panel.rule()
+        panel.line("GUI", self.current.get("nickname") or "未登录",
+                   (("切换", pick("gui")),))
+        panel.line("CLI", self.cli_cur.get("nickname") or "未登录",
+                   (("切换", pick("cli")),))
         panel.rule()
         panel.field("实例", "slot", value=labels[index] if index >= 0 else "",
-                    choices=labels, width=22, right=brief(self.slot_meta()),
-                    on_change=changed)
-        panel.grid((("切换 GUI", pick("gui")), ("切换 CLI", pick("cli")),
-                    ("新建", pick("new")), ("换号", pick("switch"))), cols=4)
-        panel.grid((("启动", pick("launch")), ("停止", pick("stop")),
-                    ("删除", pick("remove"))), cols=4)
+                    choices=labels, width=26,
+                    buttons=(("换号", pick("switch")),))
+        panel.grid((("新建", pick("new")), ("启动", pick("launch")),
+                    ("停止", pick("stop")), ("删除", pick("remove"))), cols=4)
         panel.wait()
         action = pending["action"]
         if action in ("switch", "launch", "stop", "remove"):
@@ -1518,14 +1501,8 @@ class Window(object):
             return result
         self._run(label, work)
 
-    def import_text(self):
-        """粘贴文本导入。"""
-        text = Form.text(self.root, "导入文本", "内容")
-        if text:
-            self._merge_rows(lambda: Bulk.parse(text))
-
     def import_file(self):
-        """从文件导入。"""
+        """从文件导入：json / jsonl / info / csv / txt / zip 都由 Bulk.read 认。"""
         path = filedialog.askopenfilename(
             title="选择账号文件",
             filetypes=[("账号文件", "*.json *.jsonl *.info *.csv *.txt *.zip"),
@@ -1533,23 +1510,20 @@ class Window(object):
         if path:
             self._merge_rows(lambda: Bulk.read(path))
 
-    def import_client(self):
-        """扫客户端 auth 目录导入。"""
-        self._merge_rows(lambda: Bulk.scan_client(log=self.thread_log))
-
-    def import_ide(self):
-        """只从编辑器登录态导入：VS Code 扩展 / CodeBuddy IDE / JetBrains 插件。"""
+    def scan_local(self):
+        """扫描本机登录态：客户端 auth 目录 + 编辑器（VS Code / IDE / JetBrains）。"""
         if self.busy:
             return
 
         def work():
-            """后台：解 Safe Storage 密文、摊平成账号行并合并。"""
-            rows, notes = Ide.scan(log=self.thread_log)
-            result = Bulk.merge(self.store, rows)
-            result["notes"] = notes
+            """后台：两边各读一遍，摊平成账号行后一次性合并。"""
+            rows, notes = Bulk.scan_client(log=self.thread_log)
+            extra, more = Ide.scan(log=self.thread_log)
+            result = Bulk.merge(self.store, list(rows) + list(extra))
+            result["notes"] = list(notes) + list(more)
             return result
 
-        self._run("导入", work)
+        self._run("扫描", work)
 
     def do_export(self):
         """导出账号：选格式与脱敏，再选保存位置。"""
@@ -1751,7 +1725,7 @@ class Window(object):
             return "%s → %s" % (result.get("nickname") or "", result.get("path") or "")
         if label == "注册":
             return "%s → %s" % (result.get("nickname") or "", result.get("path") or "")
-        if label == "导入":
+        if label in ("导入", "扫描"):
             return "新增 %d，更新 %d，跳过 %d，失败 %d" % (
                 len(result.get("added") or []), len(result.get("updated") or []),
                 len(result.get("skipped") or []), len(result.get("bad") or []))

@@ -34,7 +34,6 @@ class Panel(object):
         self.cfg = cfg
         self.fields = {}
         self.msg = None
-        self.right = None
         self.closed = False
         self.row = 0
         self.root = None
@@ -84,8 +83,8 @@ class Panel(object):
         return self
 
     def field(self, label, key, value="", choices=None, secret=False, width=18,
-              buttons=(), right="", on_change=None):
-        """一行「标签 + 控件」，右侧可跟附属按钮或一句现状文案。"""
+              buttons=()):
+        """一行「标签 + 控件」，右侧可跟附属按钮。"""
         cfg = self.cfg
         tk.Label(self.box, text=label, bg=cfg["panel"], fg=cfg["muted"],
                  font=(FONT, 9), anchor="w").grid(
@@ -95,9 +94,6 @@ class Panel(object):
             widget = ttk.Combobox(self.box, textvariable=var, values=list(choices),
                                   state="readonly", font=(FONT, 9), width=width)
             widget.grid(row=self.row, column=1, sticky="ew", pady=1)
-            if on_change is not None:
-                widget.bind("<<ComboboxSelected>>",
-                            lambda _event: on_change(widget.get()))
         else:
             widget = ttk.Entry(self.box, textvariable=var, font=(FONT, 9),
                                width=width, show="*" if secret else "")
@@ -108,10 +104,6 @@ class Panel(object):
             ttk.Button(side, text=text, style="Mini.TButton",
                        command=lambda fn=callback: self._call(fn)).pack(
                 side="left", padx=(0, GAP))
-        if right:
-            self.right = tk.Label(side, text=right, bg=cfg["panel"],
-                                  fg=cfg["muted"], font=(FONT, 8), anchor="w")
-            self.right.pack(side="left")
         self.fields[key] = (var, widget)
         self.row += 1
         return self
@@ -133,15 +125,19 @@ class Panel(object):
         self.row += 1
         return self
 
-    def inline(self, label, buttons):
-        """一行「dim 标签 + 并排小按钮」，同一件事的几种来源收进一行。"""
+    def line(self, label, value, buttons=()):
+        """一行「标签 + 现状文字」，右侧可跟一个按钮（登录槽位用）。"""
         cfg = self.cfg
-        line = tk.Frame(self.box, bg=cfg["panel"])
-        line.grid(row=self.row, column=0, columnspan=3, sticky="ew", pady=(3, 0))
-        tk.Label(line, text=label, bg=cfg["panel"], fg=cfg["dim"],
-                 font=(FONT, 9)).pack(side="left", padx=(2, 8))
+        tk.Label(self.box, text=label, bg=cfg["panel"], fg=cfg["muted"],
+                 font=(FONT, 9), anchor="w").grid(
+            row=self.row, column=0, sticky="w", padx=(0, 8), pady=1)
+        tk.Label(self.box, text=str(value or "—"), bg=cfg["panel"], fg=cfg["text"],
+                 font=(FONT, 9), anchor="w").grid(row=self.row, column=1,
+                                                  sticky="w", pady=1)
+        side = tk.Frame(self.box, bg=cfg["panel"])
+        side.grid(row=self.row, column=2, sticky="w", padx=(8, 0), pady=1)
         for text, callback in buttons:
-            ttk.Button(line, text=text, style="Mini.TButton", width=6,
+            ttk.Button(side, text=text, style="Mini.TButton",
                        command=lambda fn=callback: self._call(fn)).pack(
                 side="left", padx=(0, GAP))
         self.row += 1
@@ -161,14 +157,6 @@ class Panel(object):
                                fg=colors.get(tone, self.cfg["dim"]))
         except Exception:
             pass
-
-    def set_right(self, text):
-        """改右侧那句现状（下拉换选时跟着变）。"""
-        if self.right is not None:
-            try:
-                self.right.configure(text=str(text or ""))
-            except Exception:
-                pass
 
     def values(self):
         """当前控件的值：不管下拉还是输入框，都按字符串取。"""

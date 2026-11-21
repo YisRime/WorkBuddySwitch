@@ -31,29 +31,6 @@ class Form(object):
         dialog = _Dialog(parent, title, fields, note, submit, validate, buttons, width)
         return dialog.wait()
 
-    @classmethod
-    def text(cls, parent, title, label, value="", note=""):
-        """多行文本输入（导入粘贴用）。"""
-        result = cls.open(parent, title,
-                          [{"key": "text", "label": label, "value": value, "height": 10}],
-                          note=note, width=70)
-        return (result or {}).get("text")
-
-    @classmethod
-    def ask(cls, parent, title, label, value="", note=""):
-        """单行输入，返回字符串或 None。"""
-        result = cls.open(parent, title,
-                          [{"key": "value", "label": label, "value": value}], note=note)
-        return (result or {}).get("value")
-
-    @classmethod
-    def choice(cls, parent, title, label, options, value="", note=""):
-        """下拉选择，返回选中的字符串或 None。"""
-        result = cls.open(parent, title,
-                          [{"key": "value", "label": label, "choices": list(options),
-                            "value": value}], note=note)
-        return (result or {}).get("value")
-
 
 class _Dialog(object):
     """表单窗口本体：建控件、收值、校验、等关闭。"""
@@ -116,7 +93,7 @@ class _Dialog(object):
         self.top.update_idletasks()
         self._center(root)
         self.top.grab_set()
-        first = next(iter(self.entries.values()), None)
+        first = next((widget for _var, widget in self.entries.values()), None)
         if first is not None:
             first.focus_set()
         self.top.wait_window()
@@ -129,21 +106,12 @@ class _Dialog(object):
             row=row, column=0, sticky="w", padx=(14, 10), pady=3)
         box = tk.Frame(holder, bg=cfg["panel"])
         box.grid(row=row, column=1, sticky="ew", padx=(0, 14), pady=3)
-        height = int(item.get("height") or 0)
         if item.get("choices"):
             var = tk.StringVar(value=str(item.get("value") or ""))
             widget = ttk.Combobox(box, textvariable=var, values=item["choices"],
                                   state="readonly", font=("Microsoft YaHei UI", 9),
                                   width=width)
             widget.pack(fill="x")
-            self.entries[key] = ("choice", var)
-        elif height:
-            widget = tk.Text(box, height=height, width=width, font=("Consolas", 9),
-                             wrap="none", bd=1, relief="solid", highlightthickness=0,
-                             bg="#fbfbfd", fg=cfg["text"])
-            widget.insert("1.0", str(item.get("value") or ""))
-            widget.pack(fill="both", expand=True)
-            self.entries[key] = ("text", widget)
         else:
             line = tk.Frame(box, bg=cfg["panel"])
             line.pack(fill="x")
@@ -156,7 +124,7 @@ class _Dialog(object):
                 ttk.Button(line, text=text,
                            command=lambda fn=callback: self._extra(fn)).pack(
                     side="left", padx=(6, 0))
-            self.entries[key] = ("entry", var)
+        self.entries[key] = (var, widget)
         return row + 1
 
     def _center(self, root):
@@ -175,25 +143,13 @@ class _Dialog(object):
 
     def values(self):
         """当前所有控件的值。"""
-        out = {}
-        for key, (kind, widget) in self.entries.items():
-            if kind == "text":
-                out[key] = widget.get("1.0", "end").rstrip("\n")
-            else:
-                out[key] = widget.get().strip()
-        return out
+        return {key: var.get().strip() for key, (var, _widget) in self.entries.items()}
 
     def set(self, key, value):
         """改某个控件的值（发送验证码这类附属动作用）。"""
         item = self.entries.get(key)
-        if not item:
-            return
-        kind, widget = item
-        if kind == "text":
-            widget.delete("1.0", "end")
-            widget.insert("1.0", str(value or ""))
-        else:
-            widget.set(str(value or ""))
+        if item:
+            item[0].set(str(value or ""))
 
     def note(self, text):
         """把一行提示写进卡片（不清空已有错误用）。"""
