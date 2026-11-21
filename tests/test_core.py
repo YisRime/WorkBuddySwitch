@@ -342,5 +342,58 @@ class IdeTest(unittest.TestCase):
         self.assertEqual(row2["uid"], "uid-jwt")
 
 
+class UsageTest(unittest.TestCase):
+    """本地用量统计：多种会话形状、去重、窗口过滤与报表。"""
+
+    def test_scan_dedupe_and_report(self):
+        """同 id 的请求只算一次；anthropic 形态的 usage 也能认出来。"""
+        import usage
+        tmp = tempfile.mkdtemp(prefix="wb-usage-")
+        try:
+            sub = os.path.join(tmp, "CodeBuddyExtension", "Data", "uid", "VSCode", "uid",
+                               "history", "ws")
+            os.makedirs(sub)
+            now = int(time.time() * 1000)
+            request = {"id": "r1", "startedAt": now - 1000,
+                       "usage": {"inputTokens": 100, "outputTokens": 20,
+                                 "cacheTokens": 5, "credit": 2}}
+            with open(os.path.join(sub, "index.json"), "w", encoding="utf-8") as fh:
+                json.dump({"requests": [request,
+                                        {"id": "r2", "startedAt": now - 2000,
+                                         "usage": {"inputTokens": 50, "outputTokens": 10}}],
+                           "messages": []}, fh)
+            with open(os.path.join(sub, "copy.json"), "w", encoding="utf-8") as fh:
+                json.dump({"requests": [request]}, fh)
+            with open(os.path.join(tmp, "ai.jsonl"), "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"type": "assistant", "message": {
+                    "model": "claude-x",
+                    "usage": {"input_tokens": 7, "output_tokens": 3}}}) + "\n")
+            result = usage.Usage.scan(30, roots=[("测试", tmp, True)])
+            self.assertEqual(result["totals"]["input"], 157)
+            self.assertEqual(result["totals"]["output"], 33)
+            self.assertEqual(result["totals"]["credit"], 2)
+            self.assertEqual(result["byModel"]["claude-x"]["input"], 7)
+            path, _rows = usage.Usage.report(30, folder=tmp, roots=[("测试", tmp, True)])
+            self.assertTrue(os.path.isfile(path))
+            with open(path, encoding="utf-8") as fh:
+                self.assertIn("输入 tokens", fh.read())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_window_filter(self):
+        """窗口外的旧数据不计入。"""
+        import usage
+        tmp = tempfile.mkdtemp(prefix="wb-usage2-")
+        try:
+            path = os.path.join(tmp, "old.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"startedAt": int((time.time() - 40 * 86400) * 1000),
+                           "usage": {"inputTokens": 999, "outputTokens": 1}}, fh)
+            result = usage.Usage.scan(7, roots=[("旧", tmp, True)])
+            self.assertEqual(result["totals"]["total"], 0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

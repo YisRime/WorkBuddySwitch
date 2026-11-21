@@ -30,6 +30,7 @@ WorkBuddySwitch/
   signup.py     注册与登录：手机号短信链路、官方页面接力、可选的接码平台
   probe.py      账号体检：本地字段 + 上游连通，判过期 / 失效
   stats.py      积分历史：快照追加、按天归并、趋势报表
+  usage.py      本地用量统计：扫客户端自己记的会话，汇总 token / 积分
   timer.py      定时任务：按天去重地自动签到 / 活跃 / 任务 / 旅行 / 管家
   form.py       输入表单窗口（注册、导入、导出、定时共用一套控件）
   window.py     主窗口 + 配色样式 + 悬浮提示
@@ -39,7 +40,7 @@ WorkBuddySwitch/
     Backup/                     快照（auth.info + cli-auth.info + workbuddy.db + manifest）
     CLI/<实例名>/                命名 CLI 实例（home/ + config/ + slot.json + launch.cmd）
     Stats/history.jsonl         积分历史快照（一行一条）
-    Reports/                    统计报表（stats-YYYYMMDD-HHMMSS.md）
+    Reports/                    统计报表（stats-*.md 积分、usage-*.md 用量）
     settings.json               全局设置（定时任务 schedule、接码平台 sms）
     .trash/<时间戳>/             清理移走的坏文件与重复文件
 
@@ -316,6 +317,20 @@ CLI + hub 三处是风控敏感行为，建议错开账号或时段。默认槽�
 `data/Reports/stats-YYYYMMDD-HHMMSS.md`：每个账号的剩余、总量、近 7 天变化与日均消耗，
 末尾一行合计。
 
+## 用量报表
+
+右键菜单「请求用量（本地会话）」扫本机客户端自己记的会话，汇总最近 30 天的 token 与
+积分消耗，写到 `data/Reports/usage-YYYYMMDD-HHMMSS.md`：
+
+- 数据源（有哪个算哪个）：编辑器 / 扩展历史 `<本地数据根>/CodeBuddyExtension/Data/<uid>/
+  <client>/<uid>/history/` 下的 JSON；`~/.workbuddy-ai/projects`、`~/.codebuddy/projects`、
+  `~/.workbuddy/projects` 下的 JSONL；
+- 认的字段：`inputTokens / input_tokens`、`outputTokens / output_tokens`、
+  `cacheTokens / cacheReadInputTokens`、`cachedWriteTokens`、`credit`、`totalTokens`；
+- 递归找 usage 字典，按「最近的 model 与时间戳」归天；带 `id` 的按 id 去重（同一请求在
+  索引与消息里各存一份时不会重复计）；窗口外的旧数据不计；
+- 全是本地只读：不联网、不上传，也不复制 prompt / 正文。
+
 ## 定时任务
 
 `data/settings.json` 的 `schedule` 段：
@@ -428,8 +443,8 @@ python -m unittest discover -s tests -v
 
 不联网：导入导出往返（json / jsonl / info / csv / txt / zip）、CSV 与 JSONL 与纯 token
 的解析、合并去重、脱敏、清理、历史统计、定时判断、体检的本地分支、编辑器登录态的
-Safe Storage 解密（用临时 `state.vscdb` 与自造 `v10` 密文）都在临时目录里跑，不碰
-`data/` 下的真实账号。
+Safe Storage 解密（用临时 `state.vscdb` 与自造 `v10` 密文）、本地用量统计（自造会话
+文件与去重 / 窗口用例）都在临时目录里跑，不碰 `data/` 下的真实账号。
 
 ## 边界
 

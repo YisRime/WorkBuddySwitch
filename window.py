@@ -29,6 +29,7 @@ from slot import Slot
 from stats import Stats
 from store import Store
 from timer import LABELS as TIMER_LABELS, Settings, Timer
+from usage import Usage
 from util import (APP_NAME, BACKUP, CLI_CMD, FONT, MONO, Process, as_dict, due_stamp,
                   fmt_num, monthly, norm_ts, realm_label)
 
@@ -568,6 +569,7 @@ class Window(object):
         self.menu.add_command(label="导出账号…", command=self.do_export)
         self.menu.add_command(label="账号体检", command=self.do_probe)
         self.menu.add_command(label="积分报表", command=self.do_stats)
+        self.menu.add_command(label="请求用量（本地会话）", command=self.do_usage)
         self.menu.add_command(label="定时任务…", command=self.do_timer)
         self.menu.add_command(label="清理账号文件", command=self.do_clean)
         self.menu.add_command(label="设置…", command=self.do_settings)
@@ -1663,6 +1665,15 @@ class Window(object):
             "、".join(TIMER_LABELS.get(item, item) for item in section.get("actions") or []),
             "（错过当天会补跑）" if section.get("catchup") else ""), "ok")
 
+    def do_usage(self):
+        """本地用量报表：扫客户端自己记的 token / 积分（只读、不联网）。"""
+        def work():
+            """后台：扫会话文件并落一份报表。"""
+            path, result = Usage.report(30)
+            return {"path": path, "totals": result["totals"], "sources": len(result["sources"])}
+
+        self._run("用量", work)
+
     def do_settings(self):
         """设置：接码平台、默认导出目录、启动后自动体检。"""
         prefs = Settings.load()
@@ -1915,6 +1926,12 @@ class Window(object):
         if label == "统计":
             return "合计剩余 %s · %s" % (fmt_num(result.get("total"), 0),
                                         result.get("path") or "")
+        if label == "用量":
+            totals = result.get("totals") or {}
+            return "合计 %s tokens（入 %s / 出 %s / 缓存 %s）· %s" % (
+                fmt_num(totals.get("total"), 0), fmt_num(totals.get("input"), 0),
+                fmt_num(totals.get("output"), 0), fmt_num(totals.get("cache_read"), 0),
+                result.get("path") or "")
         if label == "清理":
             return "移走 %d 个文件 → %s" % (result.get("moved") or 0,
                                           result.get("trash") or "")
