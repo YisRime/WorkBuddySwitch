@@ -11,10 +11,9 @@ WorkBuddy 桌面端账号工具：一个窗口里做注册、导入、切换、�
 
 ```text
 main.pyw  入口        util.py   路径 / 区域 / 进程 / 设置   vault.py  at-rest 信封
-window.py 主窗口      panel.py  账号 / 实例 / 导出面板      client.py 登录态与切换
-store.py  账号库      bulk.py   导入导出与合并去重           slot.py   命名实例
-signup.py 注册登录    ide.py    编辑器登录态导入             api.py    上游活动接口
-usage.py  本地用量
+window.py 窗口与面板  bulk.py   导入导出 + 编辑器登录态      client.py 登录态与切换
+store.py  账号库      slot.py   命名实例                     api.py    上游活动接口
+signup.py 注册登录    usage.py  本地用量
 ```
 
 `data/` 下：`Account/<昵称>-<uid8>.json` 账号库、`CLI/<实例名>/` 命名实例、`Reports/` 报表、

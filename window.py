@@ -1,8 +1,7 @@
-"""主窗口：单页账号表 + 右侧控制卡 + 共用日志。
+"""主窗口：单页账号表 + 右侧控制卡 + 共用日志，外加 Panel 这块二级面板。
 
-表格按区域筛（国内版 / 国际版两个 chip），十个按钮里「账号」「实例」各自开一块二级
-面板（panel.py），其余直接对选中或本页账号执行。除这两块面板（panel.py），
-没有别的窗口：确认、进度、结果、错误全部实时写进日志。
+表格按区域筛（国内版 / 国际版两个 chip），十个按钮里「账号」「实例」各开一块 Panel，
+其余直接对选中或本页账号执行。除此之外没有别的窗口：确认、进度、结果、错误都写日志。
 PAD / GAP / COLS / SIDE_W / BTN_PAD 是控制区网格的尺寸约定：卡片左右边距、按钮间隙、
 列数、右栏宽度与按钮留白。
 """
@@ -20,8 +19,6 @@ from tkinter import filedialog, ttk
 from api import Activity, Growth
 from bulk import Bulk
 from client import Client, Switcher
-from ide import Ide
-from panel import Panel
 from signup import Signup
 from slot import Slot
 from store import Store
@@ -37,7 +34,11 @@ BTN_PAD = 3
 
 
 class Theme:
-    """配色与 ttk 样式：三页共用同一套控件外观。"""
+    """配色与 ttk 样式：整个程序只有这一套外观。
+
+    字号只两档——正文 9pt（标签、按钮、表格），次要 8pt（计数、状态、日志）；
+    面板与主窗口共用 TButton / Primary.TButton，不再另设小号样式。
+    """
 
     BG = "#f3f4f6"
     PANEL = "#ffffff"
@@ -78,34 +79,11 @@ class Theme:
                      relief="solid", padding=(12, 5), font=(FONT, 9),
                      width=0, anchor="center")
         st.map("TButton",
-               background=[("disabled", "#f5f6f8"), ("pressed", "#e6ecf6"),
+               background=[("disabled", cls.BG), ("pressed", "#e6ecf6"),
                            ("active", "#f2f6fc")],
-               foreground=[("disabled", "#b0b7c2")],
+               foreground=[("disabled", cls.DIM)],
                bordercolor=[("disabled", cls.EDGE_DIM), ("pressed", cls.ACCENT),
                             ("active", "#8fb0e6")])
-
-        st.configure("Mini.TButton", background=cls.PANEL, foreground=cls.TEXT,
-                     bordercolor=cls.EDGE, lightcolor=cls.PANEL,
-                     darkcolor=cls.PANEL, borderwidth=1, focusthickness=0,
-                     relief="solid", padding=(9, 3), width=0, font=(FONT, 9),
-                     anchor="center")
-        st.map("Mini.TButton",
-               background=[("disabled", "#f5f6f8"), ("pressed", "#e6ecf6"),
-                           ("active", "#f2f6fc")],
-               foreground=[("disabled", "#b0b7c2")],
-               bordercolor=[("disabled", cls.EDGE_DIM), ("pressed", cls.ACCENT),
-                            ("active", "#8fb0e6")])
-
-        st.configure("MiniPrimary.TButton", background=cls.ACCENT,
-                     foreground="#ffffff", bordercolor=cls.ACCENT_D,
-                     lightcolor=cls.ACCENT, darkcolor=cls.ACCENT, borderwidth=1,
-                     focusthickness=0, relief="solid", padding=(9, 3), width=0,
-                     font=(FONT, 9), anchor="center")
-        st.map("MiniPrimary.TButton",
-               background=[("disabled", "#cdd9ef"), ("pressed", cls.ACCENT_D),
-                           ("active", "#4a83f2")],
-               foreground=[("disabled", "#ffffff")],
-               bordercolor=[("disabled", "#b6c6e4"), ("active", cls.ACCENT_D)])
 
         st.configure("Primary.TButton", background=cls.ACCENT, foreground="#ffffff",
                      bordercolor=cls.ACCENT_D, lightcolor=cls.ACCENT,
@@ -225,6 +203,184 @@ class Tip:
             self.window = None
 
 
+class Panel(object):
+    """一块紧凑面板：按调用顺序往下排，最后 wait() 等着关闭。"""
+
+    def __init__(self, parent, title, width=380):
+        """建窗口与卡片；width 是最小宽度，内容更宽时按内容走。"""
+        self.fields = {}
+        self.msg = None
+        self.closed = False
+        self.row = 0
+        self.root = None
+        self.top = tk.Toplevel(parent)
+        self.top.title(title)
+        self.top.configure(bg=Theme.BG)
+        self.top.resizable(False, False)
+        try:
+            self.root = parent.winfo_toplevel() if parent is not None else None
+            self.top.transient(self.root)
+        except Exception:
+            pass
+        card = tk.Frame(self.top, bg=Theme.PANEL, highlightthickness=1,
+                        highlightbackground=Theme.LINE)
+        card.pack(fill="both", expand=True, padx=10, pady=10)
+        card.columnconfigure(0, weight=1)
+        self.box = tk.Frame(card, bg=Theme.PANEL)
+        self.box.grid(row=0, column=0, sticky="nsew", padx=12, pady=9)
+        self.box.columnconfigure(1, weight=1)
+        # 一张零高的底板：只用来把面板撑到 width 宽，窄内容也不会忽大忽小
+        tk.Frame(card, bg=Theme.PANEL, width=int(width), height=0).grid(
+            row=1, column=0)
+        self.top.bind("<Escape>", lambda _event: self.close())
+        self.top.protocol("WM_DELETE_WINDOW", self.close)
+
+    def head(self, pairs):
+        """顶部状态行：dim 的键配正色的值，圆点分隔，一行放完几项数字。"""
+        line = tk.Frame(self.box, bg=Theme.PANEL)
+        line.grid(row=self.row, column=0, columnspan=3, sticky="ew")
+        for index, (key, value) in enumerate(pairs):
+            if index:
+                tk.Label(line, text="·", bg=Theme.PANEL, fg=Theme.DIM,
+                         font=(FONT, 9)).pack(side="left", padx=6)
+            tk.Label(line, text=key, bg=Theme.PANEL, fg=Theme.DIM,
+                     font=(FONT, 9)).pack(side="left")
+            tk.Label(line, text=str(value), bg=Theme.PANEL, fg=Theme.TEXT,
+                     font=(FONT, 9)).pack(side="left", padx=(3, 0))
+        self.row += 1
+        return self
+
+    def rule(self):
+        """一条 1px 分隔线：状态、输入、动作三段之间各来一条。"""
+        tk.Frame(self.box, bg=Theme.LINE, height=1).grid(
+            row=self.row, column=0, columnspan=3, sticky="ew", pady=(6, 5))
+        self.row += 1
+        return self
+
+    def field(self, label, key, value="", choices=None, secret=False, width=18,
+              buttons=()):
+        """一行「标签 + 控件」，右侧可跟附属按钮。"""
+        tk.Label(self.box, text=label, bg=Theme.PANEL, fg=Theme.MUTED,
+                 font=(FONT, 9), anchor="w").grid(
+            row=self.row, column=0, sticky="w", padx=(0, 8), pady=1)
+        var = tk.StringVar(value=str(value or ""))
+        if choices is not None:
+            widget = ttk.Combobox(self.box, textvariable=var, values=list(choices),
+                                  state="readonly", font=(FONT, 9), width=width)
+            widget.grid(row=self.row, column=1, sticky="ew", pady=1)
+        else:
+            widget = ttk.Entry(self.box, textvariable=var, font=(FONT, 9),
+                               width=width, show="*" if secret else "")
+            widget.grid(row=self.row, column=1, sticky="ew", pady=1)
+        side = tk.Frame(self.box, bg=Theme.PANEL)
+        side.grid(row=self.row, column=2, sticky="w", padx=(8, 0), pady=1)
+        for text, callback in buttons:
+            ttk.Button(side, text=text,
+                       command=lambda fn=callback: self._call(fn)).pack(
+                side="left", padx=(0, GAP))
+        self.fields[key] = (var, widget)
+        self.row += 1
+        return self
+
+    def grid(self, buttons, cols=3, primary=False):
+        """一组等宽按钮：按 cols 列铺满整行，行内只留 GAP 的缝。"""
+        area = tk.Frame(self.box, bg=Theme.PANEL)
+        area.grid(row=self.row, column=0, columnspan=3, sticky="ew", pady=(5, 0))
+        for col in range(cols):
+            area.columnconfigure(col, weight=1, uniform="act")
+        for index, (text, callback) in enumerate(buttons):
+            style = "Primary.TButton" if (primary and index == 0) else "TButton"
+            ttk.Button(area, text=text, style=style,
+                       command=lambda fn=callback: self._call(fn)).grid(
+                row=index // cols, column=index % cols, sticky="ew",
+                padx=(0 if index % cols == 0 else GAP, 0),
+                pady=(0 if index < cols else GAP, 0))
+        self.row += 1
+        return self
+
+    def line(self, label, value, buttons=()):
+        """一行「标签 + 现状文字」，右侧可跟一个按钮（登录槽位用）。"""
+        tk.Label(self.box, text=label, bg=Theme.PANEL, fg=Theme.MUTED,
+                 font=(FONT, 9), anchor="w").grid(
+            row=self.row, column=0, sticky="w", padx=(0, 8), pady=1)
+        tk.Label(self.box, text=str(value or "—"), bg=Theme.PANEL, fg=Theme.TEXT,
+                 font=(FONT, 9), anchor="w").grid(row=self.row, column=1,
+                                                  sticky="w", pady=1)
+        side = tk.Frame(self.box, bg=Theme.PANEL)
+        side.grid(row=self.row, column=2, sticky="w", padx=(8, 0), pady=1)
+        for text, callback in buttons:
+            ttk.Button(side, text=text,
+                       command=lambda fn=callback: self._call(fn)).pack(
+                side="left", padx=(0, GAP))
+        self.row += 1
+        return self
+
+    def status(self, text="", tone=""):
+        """底部一行提示；没内容也占着位置，免得面板忽高忽低。"""
+        if self.msg is None:
+            self.msg = tk.Label(self.box, text="", bg=Theme.PANEL,
+                                font=(FONT, 8), anchor="w")
+            self.msg.grid(row=self.row, column=0, columnspan=3, sticky="w",
+                          pady=(5, 0))
+            self.row += 1
+        colors = {"": Theme.DIM, "ok": Theme.OK, "err": Theme.ERR}
+        try:
+            self.msg.configure(text=str(text or ""),
+                               fg=colors.get(tone, Theme.DIM))
+        except Exception:
+            pass
+
+    def values(self):
+        """当前控件的值：不管下拉还是输入框，都按字符串取。"""
+        return {key: str(item[0].get()).strip() for key, item in self.fields.items()}
+
+    def set(self, key, value):
+        """改某个控件的值（发码这类附属动作回填用）。"""
+        item = self.fields.get(key)
+        if item:
+            try:
+                item[0].set(str(value or ""))
+            except Exception:
+                pass
+
+    def _call(self, callback):
+        """按钮回调：把面板交给它，异常压成一行提示，不弹框。"""
+        try:
+            callback(self)
+        except Exception as exc:
+            self.status(str(exc))
+
+    def close(self):
+        """关面板；要用的值由回调在关闭前取走。"""
+        self.closed = True
+        try:
+            self.top.destroy()
+        except Exception:
+            pass
+
+    def wait(self):
+        """居中、模态地等它关掉，返回自己，方便外面再取 values()。"""
+        if self.closed:
+            return self
+        try:
+            self.top.update_idletasks()
+            width, height = self.top.winfo_reqwidth(), self.top.winfo_reqheight()
+            if self.root is not None:
+                x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - width) // 2)
+                y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - height) // 3)
+            else:
+                x, y = 240, 180
+            self.top.geometry("+%d+%d" % (x, y))
+            self.top.grab_set()
+            first = next((item[1] for item in self.fields.values()), None)
+            if first is not None:
+                first.focus_set()
+        except Exception:
+            pass
+        self.top.wait_window()
+        return self
+
+
 class Page(object):
     """一页的全部控件与列定义（三页结构相同，列与功能区不同）。"""
 
@@ -265,12 +421,7 @@ class Window(object):
         self.slot_metas = []
         self.last_folder = ""
         self.pages = {}
-        self.cur_lbl = None
-        self.cli_lbl = None
-        self.btn_switch = None
-        self.btn_switch_cli = None
         self.slot_var = tk.StringVar()
-        self.slot_boxes = {}
         self.slot_labels = []
         self.page = "all"
         self.realm_filter = ""
@@ -343,7 +494,7 @@ class Window(object):
         search = ttk.Entry(head, textvariable=page.filter_var)
         search.pack(side="left", fill="x", expand=True)
         search.bind("<Escape>", lambda _e: page.filter_var.set(""))
-        self.tip(search, "按昵称 / UID 过滤本页账号；Esc 清空")
+        self.tip(search, "按昵称 / UID 过滤；Esc 清空")
         page.count_lbl = tk.Label(head, text="", bg=Theme.BG, fg=Theme.DIM,
                                   font=(FONT, 8), anchor="w")
         page.count_lbl.pack(side="left", padx=(8, 10))
@@ -419,7 +570,7 @@ class Window(object):
                              stretch=(col == "pname"))
         pack_tree.grid(row=1, column=0, sticky="nsew", padx=1, pady=(0, 1))
         page.widgets["pack_hint"] = tk.Label(
-            packs, text="选中账号查看积分包；不选则操作整页账号",
+            packs, text="未选择账号",
             bg=Theme.PANEL, fg=Theme.DIM, font=(FONT, 9))
         pack_tree.tag_configure("using", background=Theme.CUR_ROW)
         pack_tree.tag_configure("gone", foreground=Theme.DIM)
@@ -503,104 +654,72 @@ class Window(object):
         return self.pages[self.page]
 
     def _build_menu(self):
-        """右键菜单：切换、同步、实例、成长活动、账号维护各一组。"""
+        """右键菜单：切换、实例、活动、账号与导入导出各一组。"""
         self.menu = tk.Menu(self.root, tearoff=0, bg=Theme.PANEL, fg=Theme.TEXT,
                             activebackground=Theme.ACCENT, activeforeground="#ffffff",
                             bd=0, font=(FONT, 9))
-        self.menu.add_command(label="切换 GUI", command=self.switch_desktop)
-        self.menu.add_command(label="切换 CLI", command=self.switch_cli)
-        self.menu.add_command(label="同步会话", command=self.sync_current)
+        self.menu_labels = {}
+
+        def add(text, command, key=""):
+            """加一条命令；带 key 的记下标签，供置灰时定位。"""
+            self.menu.add_command(label=text, command=command)
+            if key:
+                self.menu_labels[key] = text
+
+        add("切换 GUI", self.switch_desktop, "gui")
+        add("切换 CLI", self.switch_cli, "cli")
+        add("同步会话", self.sync_current)
         self.menu.add_separator()
-        self.menu.add_command(label="新建实例（用此账号）", command=self.slot_new)
-        self.menu.add_command(label="换号到选中实例", command=self.slot_switch)
-        self.menu.add_command(label="启动实例", command=self.slot_launch)
-        self.menu.add_command(label="停止实例", command=self.slot_stop)
-        self.menu.add_command(label="删除实例", command=self.slot_remove)
+        add("新建实例", self.slot_new, "new")
+        add("换号", self.slot_switch)
+        add("启动", self.slot_launch, "launch")
+        add("停止", self.slot_stop)
+        add("删除实例", self.slot_remove)
         self.menu.add_separator()
-        self.menu.add_command(label="Buddy 加油站签到", command=self.do_checkin)
-        self.menu.add_command(label="每日活跃", command=self.do_report)
-        self.menu.add_command(label="一键做任务领积分", command=self.do_tasks)
-        self.menu.add_command(label="猫猫旅行", command=self.do_travel)
-        self.menu.add_command(label="连登管家与抽奖", command=self.do_streak)
-        self.menu.add_command(label="获取积分", command=self.query_activity)
+        add("获取", self.query_activity)
+        add("签到", self.do_checkin)
+        add("活跃", self.do_report)
+        add("任务", self.do_tasks)
+        add("旅行", self.do_travel)
+        add("管家", self.do_streak)
         self.menu.add_separator()
-        self.menu.add_command(label="账号面板…", command=self.do_account)
-        self.menu.add_command(label="扫描本地登录态（客户端 / 编辑器）",
-                              command=self.scan_local)
-        self.menu.add_command(label="导出账号…", command=self.do_export)
-        self.menu.add_command(label="请求用量（本地会话）", command=self.do_usage)
+        add("账号…", self.do_account)
+        add("扫描本地登录态", self.scan_local)
+        add("导出…", self.do_export)
+        add("本地用量", self.do_usage)
         self.menu.add_separator()
-        self.menu.add_command(label="收录当前登录", command=self.import_current)
-        self.menu.add_command(label="复制 UID", command=self.copy_uid)
+        add("收进账号库", self.import_current)
+        add("复制 UID", self.copy_uid)
+
+    #: 按钮悬浮提示：动作 → 一句短说明（批量动作后面自动跟个数）。
+    TIPS = {
+        "do_account": "注册、扫描、导入与导出",
+        "do_slots": "登录槽位与命名实例",
+        "import_current": "把当前登录收进账号库",
+        "query_activity": "刷新额度与积分包",
+        "do_trial": "领国际版试用包",
+        "do_checkin": "国内版每日签到",
+        "do_report": "点亮连登",
+        "do_tasks": "做成长任务领积分",
+        "do_travel": "猫猫旅行领奖",
+        "do_streak": "补签 / 兑换 / 抽奖",
+    }
+    #: 带「N 个账号」后缀的动作。
+    TIPS_CN = ("do_checkin", "do_report", "do_tasks", "do_travel", "do_streak")
 
     def _tip(self, action, page=None):
-        """按钮悬浮提示：按动作名给一句话，范围与计数都跟当前页走。"""
-        page = page or self.page_spec
-        entry = self.selected()
-        if action == "switch_desktop":
-            if not self._slot_ready(self.slot_state.get("gui")):
-                return "GUI 槽位不可用：未检测到客户端安装或登录态文件"
-            return ("把 GUI 登录态换成 %s，会重启客户端" % entry.nickname
-                    if entry else "先选择账号")
-        if action == "switch_cli":
-            if not self._slot_ready(self.slot_state.get("cli")):
-                return "CLI 槽位不可用：未检测到 codebuddy 命令或登录态文件"
-            if not entry:
-                return "先选择账号"
-            if entry.realm != "intl":
-                return "默认 CLI 槽位只支持国际版账号；国内版请用「实例」新建"
-            return "把默认 CLI 槽位的登录态换成 %s，下次启动 CLI 生效" % entry.nickname
-        if action == "import_current":
-            return "把当前 GUI 登录态收进账号库（已有账号只更新，不新建）"
-        if action == "reload":
-            return "重新扫描 data/Account，刷新账号列表"
-        if action == "sync_current":
-            return ("把本地会话合并到当前登录账号，会重启客户端"
-                    if self.current["uid"] else "当前未登录，无法同步会话")
-        if action == "query_activity":
-            count = len(self._targets(page))
-            return ("获取 %d 个账号的积分与积分包，并写回账号文件" % count if count
-                    else "没有可取积分的凭证")
-        if action in ("slot_new", "slot_switch", "slot_launch", "slot_stop", "slot_remove"):
-            return self._tip_slot(action.split("_", 1)[1])
-        hints = {
-            "do_account": "注册、接码、导入与导出",
-            "do_slots": "登录槽位与命名实例",
-            "do_export": "导出选中（或全部）账号",
-            "do_trial": "领取国际版试用加油包",
-        }
-        if action in hints:
-            return hints[action]
-        labels = {"do_checkin": "Buddy 加油站签到", "do_report": "上报每日活跃点亮连登",
-                  "do_tasks": "一键接取、点亮并领取成长任务", "do_travel": "猫猫旅行：领奖 / 派出",
-                  "do_streak": "补签 / 礼包 / 档位兑换 / 抽奖"}
-        base = labels.get(action, action)
-        chosen = bool(self.selected_all())
-        count = len(self._cn_targets())
-        if not count:
-            return "没有国内版个人号"
-        return "对%s %d 个账号%s" % ("选中" if chosen else "本页全部", count, base)
-
-    def _tip_slot(self, what):
-        """实例类动作的提示：按动作与实例运行状态给一句话。"""
-        entry, meta = self.selected(), self.slot_meta()
-        if what in ("new", "switch") and not entry:
-            return "先选择账号"
-        if not meta:
-            return "先在实例下拉里选中实例"
-        running, name = bool(meta.get("pids")), meta["name"]
-        folder, nick = meta.get("folder") or "", entry.nickname if entry else ""
-        if what == "new":
-            return "用 %s 新建独立 CLI 实例：自选工作文件夹，建好后立即启动" % nick
-        if what == "switch":
-            return "把实例 %s 的登录态换成 %s（运行中会自动重启）" % (name, nick)
-        if what == "launch":
-            return ("实例 %s 已在运行" % name if running
-                    else "在新控制台启动实例 %s（工作文件夹 %s）" % (name, folder))
-        if what == "stop":
-            return ("停掉实例 %s 自己的 CLI 进程树，不影响其他实例" % name if running
-                    else "实例 %s 没有在运行" % name)
-        return "把实例 %s 的目录移到 data/CLI/.trash，可手动找回" % name
+        """按钮悬浮提示：一句话，批量动作带上本页个数。"""
+        text = self.TIPS.get(action)
+        if text is None:
+            return ""
+        if action in ("query_activity", "do_trial"):
+            count = len(self._intl_targets() if action == "do_trial"
+                        else self._targets(page or self.page_spec))
+            return ("%s · %d 个账号" % (text, count)) if count else "没有可用账号"
+        if action in self.TIPS_CN:
+            count = len(self._cn_targets())
+            return ("%s · %d 个账号" % (text, count)) if count else "没有国内版账号"
+        return text
 
     def realm_entries(self, realm=None):
         """本页的账号：按区域过滤，列表 / 计数 / 批量都只认这一份。"""
@@ -626,32 +745,6 @@ class Window(object):
         self.current = Client.current()
         self.cli_cur = Client.cli_current()
         uid = self.current["uid"]
-        if self.cur_lbl is not None and self.cli_lbl is not None:
-            gui = self.slot_state["gui"]
-            if not gui["exe"]:
-                self.cur_lbl.configure(text="")
-            elif uid:
-                entry = self.by_uid.get(uid)
-                self.cur_lbl.configure(text="%s · %s" % (
-                    entry.nickname if entry else uid[:8],
-                    realm_label(self.current["realm"])))
-            elif not gui["file"]:
-                self.cur_lbl.configure(text="无登录态文件")
-            else:
-                self.cur_lbl.configure(text="未登录")
-            cli = self.cli_cur
-            entry = self.by_uid.get(cli["uid"])
-            if not self.slot_state["cli"]["exe"]:
-                self.cli_lbl.configure(text="")
-            elif entry:
-                self.cli_lbl.configure(text="%s · %s" % (entry.nickname,
-                                                         realm_label(entry.realm)))
-            elif cli["uid"]:
-                self.cli_lbl.configure(text=cli["nickname"] or cli["uid"][:8])
-            elif not self.slot_state["cli"]["file"]:
-                self.cli_lbl.configure(text="无登录态文件")
-            else:
-                self.cli_lbl.configure(text="未登录")
         self.refresh_slots()
         self.refresh_tree()
 
@@ -754,7 +847,7 @@ class Window(object):
         credits = entry.credits or {}
         rows = [row for row in (credits.get("packages") or []) if isinstance(row, dict)]
         if not rows:
-            page.widgets["pack_summary"].configure(text="还没有包明细，点「刷新」拉取")
+            page.widgets["pack_summary"].configure(text="还没有包明细")
             return
         alive = sum(1 for r in rows if not r.get("is_expired"))
         page.widgets["pack_summary"].configure(
@@ -912,43 +1005,22 @@ class Window(object):
         gui_ok = free and bool(entry) and self._slot_ready(slots["gui"])
         cli_ok = free and bool(entry) and self._slot_ready(slots["cli"])
         cli_bin = bool(slots["cli"]["exe"])
-        buttons = self.page_spec.widgets.get("buttons") or {}
-        for action, btn in buttons.items():
-            if action == "slot_new":
-                state = free and bool(entry) and cli_bin
-            elif action == "sync_current":
+        for action, btn in (self.page_spec.widgets.get("buttons") or {}).items():
+            if action in ("do_account", "do_slots", "import_current"):
                 state = free
             elif action == "query_activity":
                 state = free and bool(self._targets())
-            elif action == "slot_switch":
-                state = free and bool(entry) and bool(meta)
-            elif action == "slot_launch":
-                state = free and bool(meta) and not meta.get("pids") and cli_bin
-            elif action == "slot_stop":
-                state = free and bool(meta) and bool(meta.get("pids"))
-            elif action == "slot_remove":
-                state = free and bool(meta)
-            elif action in ("do_account", "do_slots"):
-                state = free
             elif action == "do_trial":
                 state = free and bool(self._intl_targets())
-            elif action.startswith("do_"):
-                state = free and bool(self._cn_targets())
             else:
-                state = free
+                state = free and bool(self._cn_targets())
             btn.configure(state="normal" if state else "disabled")
-        for widget, ok in ((getattr(self, "btn_switch", None), gui_ok),
-                           (getattr(self, "btn_switch_cli", None), cli_ok)):
-            if widget is not None:
-                widget.configure(state="normal" if ok else "disabled")
-        for label, ok in (("切换 GUI", gui_ok), ("切换 CLI", cli_ok),
-                          ("收录当前登录", free),
-                          ("新建实例（用此账号）", free and bool(entry) and cli_bin),
-                          ("启动实例", free and cli_bin)):
-            self.menu.entryconfigure(label, state="normal" if ok else "disabled")
-        box = self.page_spec.widgets.get("slot_box")
-        if box is not None:
-            box.configure(state="readonly" if free else "disabled")
+        for key, ok in (("gui", gui_ok), ("cli", cli_ok),
+                        ("new", free and bool(entry) and cli_bin),
+                        ("launch", free and bool(meta) and cli_bin)):
+            label = self.menu_labels.get(key)
+            if label:
+                self.menu.entryconfigure(label, state="normal" if ok else "disabled")
 
     def _on_menu(self, event):
         """右键：先选中该行再弹菜单。"""
@@ -1043,7 +1115,7 @@ class Window(object):
             path = self.store.upsert(row)
             return {"nickname": row["nickname"], "path": os.path.basename(path)}
 
-        self._run("收录", work)
+        self._run("收进账号库", work)
 
     def refresh_slots(self):
         """刷新实例下拉：标签带账号与区域，尽量保住上次的选择。"""
@@ -1062,10 +1134,6 @@ class Window(object):
                 "运行中" if meta.get("pids") else "已停止"))
         self.slot_labels = labels
         index = next((i for i, m in enumerate(metas) if m["name"] == self.slot_sel), -1)
-        for box in self.slot_boxes.values():
-            box["values"] = labels
-            if index >= 0:
-                box.current(index)
         if index < 0:
             self.slot_sel = ""
             self.slot_var.set("选择实例" if metas else "暂无实例")
@@ -1090,7 +1158,7 @@ class Window(object):
             return
         folder = os.path.normpath(folder)
         self.last_folder = folder
-        self.log("将新建实例 %s，工作文件夹 %s" % (entry.nickname, folder), "dim")
+        self.log("新建实例 %s → %s" % (entry.nickname, folder), "dim")
         self._run("新建实例", lambda: Switcher.new_cli(entry.data, folder,
                                                        log=self.thread_log))
 
@@ -1106,9 +1174,8 @@ class Window(object):
         if meta.get("uid") == entry.uid:
             self.log("实例 %s 已经是该账号" % meta["name"], "dim")
             return
-        self.log("将把实例 %s 换号为 %s%s" % (
-            meta["name"], entry.nickname, "（自动重启）" if meta.get("pids") else ""), "dim")
-        self._run("实例换号", lambda: Switcher.switch_cli(entry.data, BACKUP,
+        self.log("实例 %s 换号 → %s" % (meta["name"], entry.nickname), "dim")
+        self._run("换号", lambda: Switcher.switch_cli(entry.data, BACKUP,
                                                           slot=meta["name"],
                                                           log=self.thread_log))
 
@@ -1189,7 +1256,7 @@ class Window(object):
         self._run(label, work)
 
     def query_activity(self):
-        """获取积分：连积分包一起拉，并写回各自的账号文件。"""
+        """获取：连积分包一起拉，并写回各自的账号文件。"""
         targets = self._targets()
         if not targets:
             self.log("没有可刷新的账号", "warn")
@@ -1218,10 +1285,10 @@ class Window(object):
             return {"activity": out, "count": len(targets),
                     "bad": sum(1 for info in out.values() if info.get("error"))}
 
-        self._run("获取积分", work)
+        self._run("获取", work)
 
     def do_checkin(self):
-        """Buddy 加油站签到：把状态翻成中文写进活动结果。"""
+        """签到：把状态翻成中文写进活动结果。"""
         labels = {"checked": "已签到", "already": "已签到", "pending": "处理中", "failed": "失败"}
 
         def one(entry):
@@ -1230,7 +1297,7 @@ class Window(object):
             return ({"checkin": labels.get(res["state"], res["state"])},
                     "" if res["ok"] else res["msg"])
 
-        self._cn_sweep("Buddy 加油站签到", one)
+        self._cn_sweep("签到", one)
 
     def do_report(self):
         """上报每日活跃，并顺带刷新成长数据。"""
@@ -1244,10 +1311,10 @@ class Window(object):
             except Exception:
                 return {"daily": True}, ""
 
-        self._cn_sweep("每日活跃", one)
+        self._cn_sweep("活跃", one)
 
     def do_tasks(self):
-        """一键做成长任务：逐个账号跑 Growth.run 并累计积分。"""
+        """任务：逐个账号跑 Growth.run 并累计积分。"""
         earned = {"credit": 0}
 
         def one(entry):
@@ -1256,10 +1323,10 @@ class Window(object):
             earned["credit"] += res.get("credit") or 0
             return res.get("activity"), ""
 
-        self._cn_sweep("成长任务", one, lambda: earned)
+        self._cn_sweep("任务", one, lambda: earned)
 
     def do_travel(self):
-        """猫猫旅行：领奖或派出。"""
+        """旅行：领奖或派出。"""
         def one(entry):
             """给一个账号处理旅行，失败返回原因。"""
             res = Growth.travel(entry.data)
@@ -1267,17 +1334,17 @@ class Window(object):
                 self.thread_log("%s：%s" % (entry.nickname, res.get("msg") or ""))
             return None, ("" if res.get("ok") else (res.get("msg") or "失败"))
 
-        self._cn_sweep("猫猫旅行", one)
+        self._cn_sweep("旅行", one)
 
     def do_streak(self):
-        """连登管家：补签、礼包、兑换与抽奖。"""
+        """管家：补签、礼包、兑换与抽奖。"""
         def one(entry):
             """给一个账号跑连登管家并返回最新快照。"""
             self.thread_log("—— %s · 连登管家 ——" % entry.nickname)
             res = Growth.streak(entry.data, self.thread_log)
             return res.get("activity"), ""
 
-        self._cn_sweep("连登管家", one)
+        self._cn_sweep("管家", one)
 
 
     # ---------- 注册 / 导入 / 导出 / 体检 / 统计 / 定时 / 清理 ----------
@@ -1455,7 +1522,7 @@ class Window(object):
                     self.thread_log("自动续期 %s 失败：%s" % (entry.nickname, exc))
 
         if targets and not self.busy:
-            self.thread_log("有 %d 个账号 3 天内到期，自动续期" % len(targets))
+            self.thread_log("自动续期 %d 个" % len(targets))
             threading.Thread(target=work, daemon=True).start()
 
 
@@ -1485,7 +1552,7 @@ class Window(object):
         def work():
             """后台：两边各读一遍，摊平成账号行后一次性合并。"""
             rows, notes = Bulk.scan_client(log=self.thread_log)
-            extra, more = Ide.scan(log=self.thread_log)
+            extra, more = Bulk.scan_ide(log=self.thread_log)
             result = Bulk.merge(self.store, list(rows) + list(extra))
             result["notes"] = list(notes) + list(more)
             return result
@@ -1613,10 +1680,6 @@ class Window(object):
                         self.store.save_activity(uid, info)
                     except Exception as exc:
                         self.log("活动结果写回 %s 失败：%s" % (uid[:8], exc), "warn")
-                    try:
-                        Stats.record(uid, info)
-                    except Exception:
-                        pass
             if isinstance(result, dict):
                 for item in (result.get("bad") or [])[:8]:
                     if isinstance(item, str):
@@ -1648,7 +1711,7 @@ class Window(object):
             return "%s · 下次启动 CLI 生效" % (result.get("nickname") or "")
         if label == "新建实例":
             return "%s · %s" % (result.get("slot") or "", result.get("folder") or "")
-        if label == "实例换号":
+        if label == "换号":
             text = "%s · %s" % (result.get("slot") or "", result.get("nickname") or "")
             return text + ("" if result.get("started") else " · 下次启动生效")
         if label == "启动实例":
@@ -1659,24 +1722,19 @@ class Window(object):
             if result.get("skipped") == "already":
                 return "无需改动"
             return "合并 %d 条会话" % (result.get("moved") or 0)
-        if label == "续期凭证":
-            done, failed = result.get("done") or [], result.get("failed") or []
-            return "%d 个" % len(done) + ("，%d 个失败" % len(failed) if failed else "")
-        if label == "获取积分":
+        if label == "获取":
             text = "%d 个账号" % (result.get("count") or 0)
             return text + ("，%d 个失败" % result["bad"] if result.get("bad") else "")
-        if label in ("Buddy 加油站签到", "每日活跃", "猫猫旅行", "试用"):
+        if label in ("签到", "活跃", "旅行", "试用"):
             text = "%d 个成功" % (result.get("ok") or 0)
             bad = result.get("bad") or []
             return text + ("，%d 个失败" % len(bad) if bad else "")
-        if label == "成长任务":
+        if label == "任务":
             return "%d 个账号，共增加 +%d 积分" % (
                 result.get("count") or 0, result.get("credit") or 0)
-        if label == "连登管家":
+        if label == "管家":
             return "%d 个账号已处理" % (result.get("count") or 0)
-        if label == "恢复":
-            return "已重启" if result.get("started") else "客户端未启动"
-        if label == "收录":
+        if label == "收进账号库":
             return "%s → %s" % (result.get("nickname") or "", result.get("path") or "")
         if label == "注册":
             return "%s → %s" % (result.get("nickname") or "", result.get("path") or "")
@@ -1688,23 +1746,6 @@ class Window(object):
             return "%d 个账号%s → %s" % (result.get("count") or 0,
                                         "（已脱敏）" if result.get("redact") else "",
                                         result.get("path") or "")
-        if label == "体检":
-            counts = result.get("counts") or {}
-            return "正常 %d，注意 %d，过期 %d，失效 %d" % (
-                counts.get("ok", 0), counts.get("warn", 0),
-                counts.get("expired", 0), counts.get("invalid", 0))
-        if label == "统计":
-            return "合计剩余 %s · %s" % (fmt_num(result.get("total"), 0),
-                                        result.get("path") or "")
-        if label == "用量":
-            totals = result.get("totals") or {}
-            return "合计 %s tokens（入 %s / 出 %s / 缓存 %s）· %s" % (
-                fmt_num(totals.get("total"), 0), fmt_num(totals.get("input"), 0),
-                fmt_num(totals.get("output"), 0), fmt_num(totals.get("cache_read"), 0),
-                result.get("path") or "")
-        if label == "清理":
-            return "移走 %d 个文件 → %s" % (result.get("moved") or 0,
-                                          result.get("trash") or "")
         return ""
 
     def log(self, message, level="info"):
