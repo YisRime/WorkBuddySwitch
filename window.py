@@ -1303,6 +1303,28 @@ class Window(object):
     # ---------- 注册 / 导入 / 导出 / 体检 / 统计 / 定时 / 清理 ----------
 
 
+    def _info_slots(self):
+        """实例面板顶部：登录槽位与实例现状。"""
+        gui = self.current.get("nickname") or "未登录"
+        cli = self.cli_cur.get("nickname") or "未登录"
+        running = sum(1 for meta in self.slot_metas if meta.get("pids"))
+        lines = ["GUI：%s" % gui, "CLI：%s" % cli,
+                 "实例：%d 个（运行 %d）" % (len(self.slot_metas), running)]
+        meta = self.slot_meta()
+        if meta:
+            lines.append("选中：%s · %s · %s · %s" % (
+                meta.get("name"), meta.get("nickname") or "-",
+                realm_label(meta.get("realm") or "intl"),
+                "运行中" if meta.get("pids") else "已停止"))
+        return lines
+
+    def _info_account(self):
+        """账号面板顶部：账号库与当前登录。"""
+        cn = sum(1 for entry in self.entries if entry.realm == "cn")
+        return ["账号：%d 个（国内 %d / 国际 %d）" % (len(self.entries), cn,
+                                                    len(self.entries) - cn),
+                "GUI：%s" % (self.current.get("nickname") or "未登录")]
+
     def do_account(self):
         """账号面板：注册字段 + 导入 / 导出，全部在同一层。"""
         state = {"flow": None, "sending": False}
@@ -1391,13 +1413,14 @@ class Window(object):
             return callback
 
         Form.open(self.root, "账号",
-                  [{"key": "mobile", "label": "手机号",
+                  info=self._info_account(),
+                  fields=[{"key": "mobile", "label": "手机号",
                     "buttons": (("浏览器登录", relay),)},
                    {"key": "code", "label": "验证码",
                     "buttons": (("发送验证码", send), ("接码注册", buy))},
                    {"key": "sms_token", "label": "接码 token", "secret": True,
                     "value": Prefs.sms().get("token") or ""}],
-                  submit=None,
+                  submit="关闭",
                   rows=((("登录", login), ("导出", pick("do_export"))),
                         (("导入文本", pick("import_text")),
                          ("导入文件", pick("import_file"))),
@@ -1427,9 +1450,10 @@ class Window(object):
             return callback
 
         Form.open(self.root, "实例",
-                  [{"key": "slot", "label": "实例",
+                  info=self._info_slots(),
+                  fields=[{"key": "slot", "label": "实例",
                     "choices": self.slot_labels or ["（无实例）"],
-                    "value": self.slot_var.get()}], submit=None,
+                    "value": self.slot_var.get()}], submit="关闭",
                   rows=((("切换 GUI", pick("gui")), ("切换 CLI", pick("cli"))),
                         (("新建", pick("new")), ("换号", pick("switch"))),
                         (("启动", pick("launch")), ("停止", pick("stop")),
