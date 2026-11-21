@@ -26,6 +26,7 @@ WorkBuddySwitch/
   api.py        上游接口：签到 / 上报 / 积分 / 连登 / 领奖 / 抽奖 / 旅行 / 试用 + 任务流水
   store.py      账号库：data/Account 单账号 JSON 的读取、去重、写回
   bulk.py       导入 / 导出 / 合并 / 脱敏 / 清理（平铺档与客户端 .info 档互转）
+  ide.py        从编辑器登录态导入：VS Code 扩展 / CodeBuddy IDE / JetBrains（读 Safe Storage）
   signup.py     注册与登录：手机号短信链路、官方页面接力、可选的接码平台
   probe.py      账号体检：本地字段 + 上游连通，判过期 / 失效
   stats.py      积分历史：快照追加、按天归并、趋势报表
@@ -260,6 +261,22 @@ CLI + hub 三处是风控敏感行为，建议错开账号或时段。默认槽�
 | 粘贴文本 | 合集包、JSON 数组、JSONL（一行一个凭证）、CSV（带表头按列名认）、每行一个 token |
 | 选择文件 | `.json` / `.jsonl` / `.info` / `.csv` / `.txt` / `.zip`（zip 里多个文件逐个解析） |
 | 扫本机客户端 | 读客户端 auth 目录里所有 `*.info`（跳过 `.bak` 备份），用本机 at-rest 密钥解开加密字段 |
+| 编辑器登录态 | 读 VS Code 扩展 / CodeBuddy IDE 的 `state.vscdb` 与 JetBrains 的 `secret-storage.xml` |
+
+编辑器这一路（`ide.py`，右键菜单「从编辑器导入」也可以直接走）：
+
+- VS Code（含 Insiders）、CodeBuddy CN IDE、CodeBuddy IDE 把会话存在
+  `<数据根>/User/globalStorage/state.vscdb` 的 `ItemTable` 里，值是 Chromium
+  **Safe Storage** 密文，外面再包一层 `{"type":"Buffer","data":[...]}`；
+- Windows 的解法：读 <数据根>/Local State 的 `os_crypt.encrypted_key`（base64，前 5 字节
+  是字面量 `DPAPI`），DPAPI 解出 32 字节 key，再解 `v10 || nonce(12) || ciphertext || tag(16)`
+  的 AES-256-GCM；
+- JetBrains 插件把同一份会话 JSON 明文存进 `<配置根>/<产品>/options/secret-storage.xml`
+  的 `Entry`，直接读；
+- 只读、不要求编辑器退出；解出来的每个会话摊成账号库的一行（uid 取 `account.uid`，
+  没有就从 `uid+token` 形态或 JWT 反推），再走同一套合并去重。
+- macOS / Linux 的 Safe Storage 是 AES-128-CBC（Keychain / Secret Service），本工具
+  只实现了 Windows 这条，其它平台会如实报「暂不支持」。
 
 - 身份只认 uid：平铺档直接读 `uid`，客户端 `.info` 档从 `account.uid` 读，只给 token
   时从 JWT 的 `sub` 反推（写错 uid 会让切换失败，所以永远以 sub 为准）；`realm /
@@ -313,6 +330,16 @@ CLI + hub 三处是风控敏感行为，建议错开账号或时段。默认槽�
 - 每 20 秒醒一次，只做「今天到点且还没做过」的；`catchup` 打开时错过时点当天也补跑
   （上班才开机的那种用法），每做完一个动作就记进 `last`，重启程序不会重复跑。
 - 全部在后台线程里跑，结果只写日志、不碰控件；界面「定时」按钮就是这几个字段的表单。
+
+## 设置
+
+右键菜单「设置…」把 `data/settings.json` 里除定时任务之外的几项也做成表单：
+
+| 项 | 说明 |
+|---|---|
+| 接码平台地址 / token / 引擎 / 项目 ID / 等码秒数 | 自动注册用；token 留空就手动填验证码 |
+| 默认导出目录 | 导出时保存框的起始目录，留空则每次自己选 |
+| 启动后自动体检 | 打开后程序起来 1.5 秒自动跑一遍体检（账号多时建议关） |
 
 ## 清理
 
@@ -400,8 +427,9 @@ python -m unittest discover -s tests -v
 ```
 
 不联网：导入导出往返（json / jsonl / info / csv / txt / zip）、CSV 与 JSONL 与纯 token
-的解析、合并去重、脱敏、清理、历史统计、定时判断、体检的本地分支都在临时目录里跑，
-不碰 `data/` 下的真实账号。
+的解析、合并去重、脱敏、清理、历史统计、定时判断、体检的本地分支、编辑器登录态的
+Safe Storage 解密（用临时 `state.vscdb` 与自造 `v10` 密文）都在临时目录里跑，不碰
+`data/` 下的真实账号。
 
 ## 边界
 
@@ -430,6 +458,8 @@ python -m unittest discover -s tests -v
 - 定时任务靠程序自己开着的后台线程，关掉程序就停；不写系统计划任务、不留常驻服务。
 - 导入 / 导出只读写 `data/Account` 下的 JSON，不碰客户端登录态；只有「收录」「切换」
   才会写 auth 文件。
+- 从编辑器导入是**只读**：不写回 `state.vscdb` / `secret-storage.xml`，也不需要先关
+  编辑器；Windows 之外的 Safe Storage 解码未实现（会明确报错，不会静默给出空 token）。
 
 ## 参考
 

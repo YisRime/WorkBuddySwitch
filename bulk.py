@@ -357,7 +357,8 @@ class Bulk(object):
         best, order = {}, []
         for row in rows:
             uid = str(row.get("uid") or "")
-            score = bool(row.get("accessToken")) + bool(row.get("refreshToken"))
+            score = (bool(row.get("accessToken")) + bool(row.get("refreshToken")),
+                     norm_ts(row.get("expiresAt")))
             if uid not in best:
                 order.append(uid)
                 best[uid] = (score, row)
@@ -579,7 +580,7 @@ class Bulk(object):
                 row["source"] = "client"
                 row["file"] = name
                 rows.append(row)
-        return rows, notes
+        return cls.dedupe(rows), notes
 
     # ---------- 清理 ----------
 

@@ -641,6 +641,11 @@ def _gcm_open(key, nonce, aad_bytes, ciphertext, tag):
     return _gctr(aes, j0, ciphertext)
 
 
+def gcm_open(key, nonce, aad_bytes, ciphertext, tag):
+    """公开的 GCM 解密入口：编辑器 Safe Storage 这类外部格式也用它。"""
+    return _gcm_open(key, nonce, aad_bytes, ciphertext, tag)
+
+
 if __name__ == "__main__":
     if AtRest.WORKER_FLAG in sys.argv:
         sys.exit(AtRest.worker_main())

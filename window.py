@@ -22,12 +22,13 @@ from api import Activity, Growth
 from bulk import Bulk
 from client import Client, Switcher
 from form import Form
+from ide import Ide
 from probe import Probe
 from signup import Signup
 from slot import Slot
 from stats import Stats
 from store import Store
-from timer import LABELS as TIMER_LABELS, Timer
+from timer import LABELS as TIMER_LABELS, Settings, Timer
 from util import (APP_NAME, BACKUP, CLI_CMD, FONT, MONO, Process, as_dict, due_stamp,
                   fmt_num, monthly, norm_ts, realm_label)
 
@@ -255,6 +256,7 @@ class Window(object):
         self.reload()
         self._start_timer()
         self.root.after(120, self._pump)
+        self.root.after(1500, self._auto_probe)
 
     def _build(self):
         """装好菜单、主体与日志区。"""
@@ -561,11 +563,14 @@ class Window(object):
         self.menu.add_separator()
         self.menu.add_command(label="注册 / 手机号登录…", command=self.do_signup)
         self.menu.add_command(label="导入账号…", command=self.do_import)
+        self.menu.add_command(label="从编辑器导入（VS Code / IDE / JetBrains）",
+                              command=self.import_ide)
         self.menu.add_command(label="导出账号…", command=self.do_export)
         self.menu.add_command(label="账号体检", command=self.do_probe)
         self.menu.add_command(label="积分报表", command=self.do_stats)
         self.menu.add_command(label="定时任务…", command=self.do_timer)
         self.menu.add_command(label="清理账号文件", command=self.do_clean)
+        self.menu.add_command(label="设置…", command=self.do_settings)
         self.menu.add_command(label="复制账号 JSONL", command=self.copy_accounts)
         self.menu.add_separator()
         self.menu.add_command(label="全选账号", command=self.select_all)
@@ -1490,7 +1495,8 @@ class Window(object):
             self.root, "导入账号", "从哪里导入",
             ["粘贴文本（JSON / JSONL / CSV / 每行一个 token）",
              "选择文件（json / jsonl / info / csv / txt / zip）",
-             "扫描本机客户端 auth 目录（*.info）"])
+             "扫描本机客户端 auth 目录（*.info）",
+             "从编辑器登录态导入（VS Code / CodeBuddy IDE / JetBrains）"])
         if not mode:
             return
         text, path = "", ""
@@ -1510,12 +1516,28 @@ class Window(object):
 
         def work():
             """后台：解析并合并进账号库，返回新增 / 更新 / 跳过明细。"""
-            if mode.startswith("扫描"):
+            if mode.startswith("从编辑器"):
+                rows, notes = Ide.scan(log=self.thread_log)
+            elif mode.startswith("扫描"):
                 rows, notes = Bulk.scan_client(log=self.thread_log)
             elif path:
                 rows, notes = Bulk.read(path)
             else:
                 rows, notes = Bulk.parse(text)
+            result = Bulk.merge(self.store, rows)
+            result["notes"] = notes
+            return result
+
+        self._run("导入", work)
+
+    def import_ide(self):
+        """只从编辑器登录态导入：VS Code 扩展 / CodeBuddy IDE / JetBrains 插件。"""
+        if self.busy:
+            return
+
+        def work():
+            """后台：解 Safe Storage 密文、摊平成账号行并合并。"""
+            rows, notes = Ide.scan(log=self.thread_log)
             result = Bulk.merge(self.store, rows)
             result["notes"] = notes
             return result
@@ -1546,8 +1568,10 @@ class Window(object):
             self.log("单账号 .info 只能选中一个账号再导出", "warn")
             return
         default = "workbuddy-accounts-%s.%s" % (time.strftime("%Y%m%d-%H%M"), fmt)
+        folder = str(as_dict(Settings.load().get("ui")).get("export_dir") or "")
         path = filedialog.asksaveasfilename(
             title="导出到", initialfile=default, defaultextension="." + fmt,
+            initialdir=folder or None,
             filetypes=[(fmt, "*." + fmt), ("全部文件", "*.*")])
         if not path:
             return
@@ -1639,6 +1663,46 @@ class Window(object):
             "、".join(TIMER_LABELS.get(item, item) for item in section.get("actions") or []),
             "（错过当天会补跑）" if section.get("catchup") else ""), "ok")
 
+    def do_settings(self):
+        """设置：接码平台、默认导出目录、启动后自动体检。"""
+        prefs = Settings.load()
+        sms = as_dict(prefs.get("sms"))
+        ui = as_dict(prefs.get("ui"))
+        values = Form.open(
+            self.root, "设置",
+            [{"key": "sms_base", "label": "接码平台地址",
+              "value": sms.get("base") or "https://www.jichisms.com"},
+             {"key": "sms_token", "label": "接码平台 token", "secret": True,
+              "value": sms.get("token") or ""},
+             {"key": "sms_engine", "label": "接码引擎", "choices": ["a", "b"],
+              "value": sms.get("engine") or "a"},
+             {"key": "sms_project", "label": "接码项目 ID",
+              "value": sms.get("project_id") or "139372"},
+             {"key": "sms_wait", "label": "等码秒数",
+              "value": str(sms.get("wait") or 90)},
+             {"key": "export_dir", "label": "默认导出目录",
+              "value": ui.get("export_dir") or ""},
+             {"key": "auto_probe", "label": "启动后自动体检", "choices": ["关", "开"],
+              "value": "开" if ui.get("auto_probe") else "关"}],
+            note="接码平台只服务自动注册：填了 token 才会用，留空就手动填验证码；"
+                 "导出目录留空则每次弹保存框。")
+        if not values:
+            return
+        wait = str(values.get("sms_wait") or "90").strip()
+        if not wait.isdigit():
+            self.log("等码秒数要填数字", "warn")
+            return
+        doc = Settings.load()
+        doc["sms"] = {"base": str(values.get("sms_base") or "").strip(),
+                      "token": str(values.get("sms_token") or "").strip(),
+                      "engine": str(values.get("sms_engine") or "a"),
+                      "project_id": str(values.get("sms_project") or "").strip(),
+                      "wait": int(wait)}
+        doc["ui"] = {"export_dir": str(values.get("export_dir") or "").strip(),
+                     "auto_probe": str(values.get("auto_probe")) == "开"}
+        Settings.save(doc)
+        self.log("设置已保存到 data/settings.json", "ok")
+
     def do_clean(self):
         """清理账号目录：坏文件与同 uid 重复文件挪进 data/.trash。"""
         if self.busy:
@@ -1682,6 +1746,15 @@ class Window(object):
             Growth.run(row, self.thread_log)
         except Exception as exc:
             self.thread_log("成长任务失败：%s" % exc)
+
+    def _auto_probe(self):
+        """启动后自动体检（设置里打开才做，且账号库非空）。"""
+        try:
+            wanted = as_dict(Settings.load().get("ui")).get("auto_probe")
+        except Exception:
+            wanted = False
+        if wanted and self.entries and not self.busy:
+            self.do_probe()
 
     def _start_timer(self):
         """按当前设置重建定时调度线程；动作直接调活动接口。"""

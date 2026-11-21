@@ -236,5 +236,111 @@ class SignupTest(unittest.TestCase):
             signup.Signup.mobile("12345")
 
 
+class IdeTest(unittest.TestCase):
+    """编辑器登录态导入：Safe Storage 解密、会话摊平、JetBrains XML。"""
+
+    @staticmethod
+    def _encrypt(key, nonce, plaintext):
+        """用 vault 的 AES 原语造一段 v10 + GCM 密文（测试专用，GCTR 对称）。"""
+        import vault
+        aes = vault._AES(key)
+        h = int.from_bytes(aes.encrypt_block(b"\x00" * 16), "big")
+        j0 = vault._j0(aes, nonce)
+        cipher = vault._gctr(aes, j0, plaintext)
+        tag = (int.from_bytes(aes.encrypt_block(j0), "big")
+               ^ vault._ghash(h, b"", cipher)).to_bytes(16, "big")
+        return b"v10" + nonce + cipher + tag
+
+    def test_decrypt_and_scan(self):
+        """造一个 state.vscdb，扫描能解出 uid / token 并按区归类。"""
+        import ide
+        import sqlite3
+        tmp = tempfile.mkdtemp(prefix="wb-ide-")
+        try:
+            root = os.path.join(tmp, "Code")
+            os.makedirs(os.path.join(root, "User", "globalStorage"), exist_ok=True)
+            db = os.path.join(root, "User", "globalStorage", "state.vscdb")
+            conn = sqlite3.connect(db)
+            conn.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
+            payload = {
+                "id": "Tencent-Cloud.coding-copilot",
+                "token": token("uid-ide-1"),
+                "refreshToken": "refresh-1",
+                "expiresAt": int(time.time() * 1000) + 3600_000,
+                "domain": "www.codebuddy.cn",
+                "accessToken": "uid-ide-1+" + token("uid-ide-1"),
+                "account": {"uid": "uid-ide-1", "nickname": "编辑器号"},
+                "auth": {"accessToken": token("uid-ide-1"), "refreshToken": "refresh-1",
+                         "domain": "www.codebuddy.cn",
+                         "expiresAt": int(time.time() * 1000) + 3600_000},
+            }
+            key = bytes(range(32))
+            blob = self._encrypt(key, b"0123456789ab",
+                                 json.dumps(payload).encode("utf-8"))
+            value = json.dumps({"type": "Buffer", "data": list(blob)})
+            conn.execute("INSERT INTO ItemTable VALUES (?, ?)",
+                         ('secret://{"extensionId":"tencent-cloud.coding-copilot",'
+                          '"key":"Tencent-Cloud.coding-copilot.new.accessToken"}', value))
+            conn.commit()
+            conn.close()
+
+            original = ide.Ide.local_key.__func__
+            original_paths = ide.Ide.db_paths.__func__
+            try:
+                ide.Ide.local_key = classmethod(lambda cls, _root: key)
+                ide.Ide.db_paths = classmethod(
+                    lambda cls: [("VS Code 扩展", root, db)])
+                rows, notes = ide.Ide.scan()
+            finally:
+                ide.Ide.local_key = classmethod(original)
+                ide.Ide.db_paths = classmethod(original_paths)
+            self.assertEqual(len(rows), 1, notes)
+            self.assertEqual(rows[0]["uid"], "uid-ide-1")
+            self.assertEqual(rows[0]["nickname"], "编辑器号")
+            self.assertEqual(rows[0]["realm"], "cn")
+            self.assertTrue(rows[0]["refreshToken"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_reject_cbc(self):
+        """v11 是 AES-128-CBC，明确报不支持而不是解出垃圾。"""
+        import ide
+        with self.assertRaises(Exception):
+            ide.Ide.decrypt(b"v11" + b"x" * 40, bytes(32))
+
+    def test_jetbrains_xml(self):
+        """JetBrains 的 secret-storage.xml 里是明文 JSON（属性转义）。"""
+        import ide
+        tmp = tempfile.mkdtemp(prefix="wb-jb-")
+        try:
+            path = os.path.join(tmp, "options", "secret-storage.xml")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            payload = json.dumps({"account": {"uid": "uid-jb-1", "nickname": "JB号"},
+                                  "auth": {"accessToken": token("uid-jb-1"),
+                                           "refreshToken": "r-jb"},
+                                  "token": token("uid-jb-1")})
+            escaped = (payload.replace("&", "&amp;").replace("<", "&lt;")
+                       .replace(">", "&gt;").replace('"', "&quot;"))
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write('<MapStorage><Scores><Entry key="Tencent-Cloud.coding-copilot.'
+                         'new.accessToken" value="%s" /></Scores></MapStorage>' % escaped)
+            pairs = ide.Ide.jetbrains_entries(path)
+            self.assertEqual(len(pairs), 1)
+            row = ide.Ide.session_row(json.loads(pairs[0][1]), "JetBrains")
+            self.assertEqual(row["uid"], "uid-jb-1")
+            self.assertEqual(row["nickname"], "JB号")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_session_row_fallbacks(self):
+        """没有 account.uid 时，从 accessToken 的 uid+token 形态或 JWT 反推。"""
+        import ide
+        row = ide.Ide.session_row({"accessToken": "uid-xyz+" + token("uid-xyz"),
+                                   "auth": {"accessToken": token("uid-xyz")}})
+        self.assertEqual(row["uid"], "uid-xyz")
+        row2 = ide.Ide.session_row({"auth": {"accessToken": token("uid-jwt")}})
+        self.assertEqual(row2["uid"], "uid-jwt")
+
+
 if __name__ == "__main__":
     unittest.main()
