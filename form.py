@@ -26,10 +26,9 @@ class Form(object):
 
     @classmethod
     def open(cls, parent, title, fields, note="", submit="确定", validate=None,
-             buttons=(), width=46, rows=(), info=()):
-        """打开表单并等它关闭；取消返回 None。rows 给出多行按钮。"""
-        dialog = _Dialog(parent, title, fields, note, submit, validate, buttons,
-                         width, rows)
+             buttons=(), width=46):
+        """打开表单并等它关闭；取消返回 None。"""
+        dialog = _Dialog(parent, title, fields, note, submit, validate, buttons, width)
         return dialog.wait()
 
     @classmethod
@@ -59,8 +58,7 @@ class Form(object):
 class _Dialog(object):
     """表单窗口本体：建控件、收值、校验、等关闭。"""
 
-    def __init__(self, parent, title, fields, note, submit, validate, buttons, width,
-                 rows=(), info=()):
+    def __init__(self, parent, title, fields, note, submit, validate, buttons, width):
         """一次性把窗口与控件建好。"""
         cfg = _theme()
         self.cfg = cfg
@@ -78,23 +76,15 @@ class _Dialog(object):
         holder = tk.Frame(self.top, bg=cfg["panel"], highlightthickness=1,
                           highlightbackground=cfg["line"])
         holder.pack(fill="both", expand=True, padx=12, pady=12)
-        if not rows:
-            tk.Label(holder, text=title, bg=cfg["panel"], fg=cfg["text"],
-                     font=("Microsoft YaHei UI", 11, "bold"), anchor="w").grid(
-                row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 6))
-        if note and not rows:
+        tk.Label(holder, text=title, bg=cfg["panel"], fg=cfg["text"],
+                 font=("Microsoft YaHei UI", 11, "bold"), anchor="w").grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 6))
+        if note:
             tk.Label(holder, text=note, bg=cfg["panel"], fg=cfg["dim"],
                      font=("Microsoft YaHei UI", 8), anchor="w", justify="left",
                      wraplength=520).grid(row=1, column=0, columnspan=2, sticky="w",
                                           padx=14, pady=(0, 6))
-        row = 2 if (note and not rows) else 1
-        for line in info:
-            tk.Label(holder, text=line, bg=cfg["panel"], fg=cfg["muted"],
-                     font=("Microsoft YaHei UI", 9), anchor="w").grid(
-                row=row, column=0, columnspan=2, sticky="w", padx=14, pady=1)
-            row += 1
-        if info:
-            row += 1
+        row = 2 if note else 1
         for item in self.fields:
             row = self._field(holder, row, item, width)
         self.message = tk.Label(holder, text="", bg=cfg["panel"], fg=cfg["err"],
@@ -104,11 +94,11 @@ class _Dialog(object):
         row += 1
         row_no = row
         bar = tk.Frame(holder, bg=cfg["panel"])
-        for group in (([list(buttons)] if buttons else []) + [list(row) for row in rows]):
+        if buttons:
             line = tk.Frame(holder, bg=cfg["panel"])
             line.grid(row=row_no, column=0, columnspan=2, sticky="ew", padx=14,
                       pady=(2, 0))
-            for text, callback in group:
+            for text, callback in buttons:
                 ttk.Button(line, text=text,
                            command=lambda fn=callback: self._extra(fn)).pack(
                     side="left", padx=(0, 6))

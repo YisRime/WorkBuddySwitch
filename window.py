@@ -1,9 +1,8 @@
-"""主窗口：国内版 / 国际版 / 全部三页，右侧控制区随页切换，日志三页共用。
+"""主窗口：单页账号表 + 右侧控制卡 + 共用日志。
 
-国内版页只列国内版账号，只给成长体系（签到 / 活跃 / 任务 / 旅行 / 管家）与积分包
-明细；国际版页只列国际版账号，只给 GUI / CLI 两个登录槽位的切换、会话同步、凭证
-续期与试用；全部页把两区账号并进一张表，管注册、导入、导出、体检、统计、定时与
-清理。除了输入表单（form.py），没有弹窗：确认、进度、结果、错误全部实时写进日志。
+表格按区域筛（国内版 / 国际版两个 chip），十个按钮里「账号」「实例」各自开一块二级
+面板（panel.py），其余直接对选中或本页账号执行。除输入表单（form.py）与这两块面板，
+没有别的窗口：确认、进度、结果、错误全部实时写进日志。
 PAD / GAP / COLS / SIDE_W / BTN_PAD 是控制区网格的尺寸约定：卡片左右边距、按钮间隙、
 列数、右栏宽度与按钮留白。
 """
@@ -23,6 +22,7 @@ from bulk import Bulk
 from client import Client, Switcher
 from form import Form
 from ide import Ide
+from panel import Panel
 from signup import Signup
 from slot import Slot
 from store import Store
@@ -84,6 +84,29 @@ class Theme:
                foreground=[("disabled", "#b0b7c2")],
                bordercolor=[("disabled", cls.EDGE_DIM), ("pressed", cls.ACCENT),
                             ("active", "#8fb0e6")])
+
+        st.configure("Mini.TButton", background=cls.PANEL, foreground=cls.TEXT,
+                     bordercolor=cls.EDGE, lightcolor=cls.PANEL,
+                     darkcolor=cls.PANEL, borderwidth=1, focusthickness=0,
+                     relief="solid", padding=(9, 3), width=0, font=(FONT, 9),
+                     anchor="center")
+        st.map("Mini.TButton",
+               background=[("disabled", "#f5f6f8"), ("pressed", "#e6ecf6"),
+                           ("active", "#f2f6fc")],
+               foreground=[("disabled", "#b0b7c2")],
+               bordercolor=[("disabled", cls.EDGE_DIM), ("pressed", cls.ACCENT),
+                            ("active", "#8fb0e6")])
+
+        st.configure("MiniPrimary.TButton", background=cls.ACCENT,
+                     foreground="#ffffff", bordercolor=cls.ACCENT_D,
+                     lightcolor=cls.ACCENT, darkcolor=cls.ACCENT, borderwidth=1,
+                     focusthickness=0, relief="solid", padding=(9, 3), width=0,
+                     font=(FONT, 9), anchor="center")
+        st.map("MiniPrimary.TButton",
+               background=[("disabled", "#cdd9ef"), ("pressed", cls.ACCENT_D),
+                           ("active", "#4a83f2")],
+               foreground=[("disabled", "#ffffff")],
+               bordercolor=[("disabled", "#b6c6e4"), ("active", cls.ACCENT_D)])
 
         st.configure("Primary.TButton", background=cls.ACCENT, foreground="#ffffff",
                      bordercolor=cls.ACCENT_D, lightcolor=cls.ACCENT,
@@ -546,18 +569,11 @@ class Window(object):
             return "把默认 CLI 槽位的登录态换成 %s，下次启动 CLI 生效" % entry.nickname
         if action == "import_current":
             return "把当前 GUI 登录态收录进账号库（已有账号只更新，不新建）"
-        if action == "restore_backup":
-            return ("用 data/Backup 快照恢复登录态与本地库，然后重启客户端"
-                    if self._has_backup() else "还没有备份")
         if action == "reload":
             return "重新扫描 data/Account，刷新账号列表"
         if action == "sync_current":
             return ("把本地会话合并到当前登录账号，会重启客户端"
                     if self.current["uid"] else "当前未登录，无法同步会话")
-        if action == "refresh_credential":
-            count = len(self._targets(page))
-            return ("续期 %d 个账号（换新 accessToken / refreshToken）" % count
-                    if count else "没有可续期的凭证")
         if action == "query_activity":
             count = len(self._targets(page))
             return ("获取 %d 个账号的积分与积分包，并写回账号文件" % count if count
@@ -565,12 +581,10 @@ class Window(object):
         if action in ("slot_new", "slot_switch", "slot_launch", "slot_stop", "slot_remove"):
             return self._tip_slot(action.split("_", 1)[1])
         hints = {
-            "do_account": "注册 / 导入 / 导出",
-            "do_slots": "登录槽位与实例",
-            "do_signup": "手机号注册 / 登录",
-            "do_import": "从文本、文件或客户端导入账号",
+            "do_account": "注册、接码、导入与导出",
+            "do_slots": "登录槽位与命名实例",
             "do_export": "导出选中（或全部）账号",
-                        "do_trial": "领取国际版试用加油包",
+            "do_trial": "领取国际版试用加油包",
         }
         if action in hints:
             return hints[action]
@@ -604,11 +618,6 @@ class Window(object):
             return ("停掉实例 %s 自己的 CLI 进程树，不影响其他实例" % name if running
                     else "实例 %s 没有在运行" % name)
         return "把实例 %s 的目录移到 data/CLI/.trash，可手动找回" % name
-
-    @staticmethod
-    def _has_backup():
-        """data/Backup 里有没有可用的备份。"""
-        return os.path.isfile(os.path.join(BACKUP, "manifest.json"))
 
     def realm_entries(self, realm=None):
         """本页的账号：按区域过滤，列表 / 计数 / 批量都只认这一份。"""
@@ -924,11 +933,9 @@ class Window(object):
         for action, btn in buttons.items():
             if action == "slot_new":
                 state = free and bool(entry) and cli_bin
-            elif action == "restore_backup":
-                state = free and self._has_backup()
             elif action == "sync_current":
                 state = free
-            elif action in ("refresh_credential", "query_activity"):
+            elif action == "query_activity":
                 state = free and bool(self._targets())
             elif action == "slot_switch":
                 state = free and bool(entry) and bool(meta)
@@ -942,10 +949,6 @@ class Window(object):
                 state = free
             elif action == "do_trial":
                 state = free and bool(self._intl_targets())
-            elif action == "do_trial":
-                state = free and bool(self._intl_targets())
-            elif action == "copy_accounts":
-                state = free and bool(self.entries)
             elif action.startswith("do_"):
                 state = free and bool(self._cn_targets())
             else:
@@ -1303,82 +1306,66 @@ class Window(object):
     # ---------- 注册 / 导入 / 导出 / 体检 / 统计 / 定时 / 清理 ----------
 
 
-    def _info_slots(self):
-        """实例面板顶部：登录槽位与实例现状。"""
-        gui = self.current.get("nickname") or "未登录"
-        cli = self.cli_cur.get("nickname") or "未登录"
-        running = sum(1 for meta in self.slot_metas if meta.get("pids"))
-        lines = ["GUI：%s" % gui, "CLI：%s" % cli,
-                 "实例：%d 个（运行 %d）" % (len(self.slot_metas), running)]
-        meta = self.slot_meta()
-        if meta:
-            lines.append("选中：%s · %s · %s · %s" % (
-                meta.get("name"), meta.get("nickname") or "-",
-                realm_label(meta.get("realm") or "intl"),
-                "运行中" if meta.get("pids") else "已停止"))
-        return lines
-
-    def _info_account(self):
-        """账号面板顶部：账号库与当前登录。"""
-        cn = sum(1 for entry in self.entries if entry.realm == "cn")
-        return ["账号：%d 个（国内 %d / 国际 %d）" % (len(self.entries), cn,
-                                                    len(self.entries) - cn),
-                "GUI：%s" % (self.current.get("nickname") or "未登录")]
-
     def do_account(self):
-        """账号面板：注册字段 + 导入 / 导出，全部在同一层。"""
+        """账号面板：一行状态、三行输入、两组动作，注册与导入导出同屏完成。"""
         state = {"flow": None, "sending": False}
 
-        def send(form):
-            """发验证码。"""
+        def send(panel):
+            """发验证码：先规范号码，再在后台开链请求，回执写面板底部。"""
             if state["sending"]:
                 return
-            digits, _c = Signup.mobile(form.values().get("mobile") or "")
+            try:
+                digits, _country = Signup.mobile(panel.values().get("mobile") or "")
+            except Exception as exc:
+                panel.status(str(exc))
+                return
             state["sending"] = True
-            form.note("发送中…")
+            panel.status("发送中…", "dim")
 
             def work():
-                """后台开链并请求验证码。"""
+                """后台开链接并请求验证码，回来只说一句成没成。"""
                 try:
                     flow = Signup.start()
                     Signup.send_code(flow, digits)
                     state["flow"] = flow
-                    self.root.after(0, lambda: form.note("已发送"))
                 except Exception as exc:
-                    self.root.after(0, lambda: form.note(str(exc)))
+                    why = str(exc)
+                    self.root.after(0, lambda: panel.status(why))
+                else:
+                    self.root.after(0, lambda: panel.status("已发送", "ok"))
                 finally:
                     state["sending"] = False
 
             threading.Thread(target=work, daemon=True).start()
 
-        def buy(form):
-            """接码注册：租号 → 发码 → 取码 → 校验。"""
-            token = str(form.values().get("sms_token") or "").strip()
+        def buy(panel):
+            """接码注册：记住 token，关面板后整条流程在后台跑。"""
+            token = str(panel.values().get("sms_token") or "").strip()
             if not token:
-                form.note("先填接码 token")
+                panel.status("先填接码 token")
                 return
             Prefs.save_sms(token=token, base="https://www.jichisms.com",
                            project_id="139372")
-            form.note("租号中…")
-            form.close()
+            panel.close()
 
             def work():
-                """后台整条接码流程。"""
+                """后台租号、发码、取码、换凭证，最后并进账号库。"""
                 try:
                     row = Signup.auto_register(log=self.thread_log)
                 except Exception as exc:
                     self.thread_log("接码注册失败：%s" % exc)
                 else:
-                    self.root.after(0, lambda: self._run("注册", lambda: self._save_row(row)))
+                    self.root.after(0, lambda: self._run(
+                        "注册", lambda: self._save_row(row)))
 
             threading.Thread(target=work, daemon=True).start()
 
-        def relay(form):
-            """浏览器登录。"""
-            form.close()
+        def relay(panel):
+            """浏览器登录：关面板、开浏览器，再把回调里的凭证收回来。"""
+            panel.close()
 
             def work():
-                """后台轮询收回凭证。"""
+                """后台轮询，等浏览器那边把登录走完。"""
                 try:
                     start = Signup.official_start()
                     import webbrowser
@@ -1387,45 +1374,52 @@ class Window(object):
                 except Exception as exc:
                     self.thread_log("浏览器登录失败：%s" % exc)
                 else:
-                    self.root.after(0, lambda: self._run("注册", lambda: self._save_row(row)))
+                    self.root.after(0, lambda: self._run(
+                        "注册", lambda: self._save_row(row)))
 
             threading.Thread(target=work, daemon=True).start()
 
-        def login(form):
-            """用填好的验证码换凭证。"""
-            code = str(form.values().get("code") or "").strip()
+        def login(panel):
+            """用填好的验证码换凭证，成功直接收进账号库。"""
+            code = str(panel.values().get("code") or "").strip()
             flow = state["flow"]
             if flow is None:
-                form.note("先发送验证码")
+                panel.status("先发验证码")
                 return
             if not re.fullmatch(r"\d{6}", code):
-                form.note("验证码 6 位")
+                panel.status("验证码 6 位")
                 return
-            form.close()
+            panel.close()
             self._run("注册", lambda: self._save_row(
                 Signup.verify(flow, code, log=self.thread_log)))
 
         def pick(name):
-            """跳到导入 / 导出。"""
-            def callback(form):
-                form.close()
+            """先关面板，再开导入 / 导出。"""
+            def callback(panel):
+                panel.close()
                 getattr(self, name)()
             return callback
 
-        Form.open(self.root, "账号",
-                  info=self._info_account(),
-                  fields=[{"key": "mobile", "label": "手机号",
-                    "buttons": (("浏览器登录", relay),)},
-                   {"key": "code", "label": "验证码",
-                    "buttons": (("发送验证码", send), ("接码注册", buy))},
-                   {"key": "sms_token", "label": "接码 token", "secret": True,
-                    "value": Prefs.sms().get("token") or ""}],
-                  submit="关闭",
-                  rows=((("登录", login), ("导出", pick("do_export"))),
-                        (("导入文本", pick("import_text")),
-                         ("导入文件", pick("import_file"))),
-                        (("导入客户端", pick("import_client")),
-                         ("导入编辑器", pick("import_ide")))))
+        cn = sum(1 for entry in self.entries if entry.realm == "cn")
+        panel = Panel(self.root, "账号", width=400)
+        panel.head([("国内", cn), ("国际", len(self.entries) - cn),
+                    ("GUI", self.current.get("nickname") or "未登录")])
+        panel.rule()
+        panel.field("手机号", "mobile", width=16,
+                    buttons=(("浏览器登录", relay),))
+        panel.field("验证码", "code", width=16,
+                    buttons=(("发送", send), ("接码", buy)))
+        panel.field("接码 token", "sms_token", value=Prefs.sms().get("token") or "",
+                    secret=True, width=16)
+        panel.rule()
+        panel.grid((("登录", login), ("导出", pick("do_export"))), cols=2,
+                   primary=True)
+        panel.inline(
+            "导入", (("文本", pick("import_text")),
+                     ("文件", pick("import_file")),
+                     ("客户端", pick("import_client")),
+                     ("编辑器", pick("import_ide"))))
+        panel.wait()
 
     def _save_row(self, row):
         """把一条账号写进库。"""
@@ -1434,30 +1428,57 @@ class Window(object):
 
 
     def do_slots(self):
-        """实例面板：登录槽位与实例动作，三行。"""
+        """实例面板：一行状态、一行实例选择、两行按钮，切槽位与启停都在这里。"""
         pending = {"action": "", "slot": self.slot_sel}
 
+        def meta_of(label):
+            """下拉里的标签换回实例元数据：标签与实例列表同序。"""
+            if label in self.slot_labels:
+                index = self.slot_labels.index(label)
+                if index < len(self.slot_metas):
+                    return self.slot_metas[index]
+            return None
+
+        def brief(meta):
+            """一句现状：账号 · 区域 · 运行态。"""
+            if not meta:
+                return "暂无实例" if not self.slot_metas else "未选择"
+            return "%s · %s · %s" % (meta.get("nickname") or "无账号",
+                                     realm_label(meta.get("realm") or "intl"),
+                                     "运行中" if meta.get("pids") else "已停止")
+
+        def changed(label):
+            """下拉换选：跟着改右侧那句现状与记下的实例名。"""
+            meta = meta_of(label)
+            pending["slot"] = (meta or {}).get("name") or ""
+            panel.set_right(brief(meta))
+
         def pick(name):
-            """记下实例与动作并关面板。"""
-            def callback(form):
-                label = str(form.values().get("slot") or "")
-                pending["slot"] = next(
-                    (meta["name"] for index, meta in enumerate(self.slot_metas)
-                     if index < len(self.slot_labels)
-                     and self.slot_labels[index] == label), "")
+            """记下要做的动作并关面板，动作回到面板外执行。"""
+            def callback(panel):
+                meta = meta_of(str(panel.values().get("slot") or ""))
+                pending["slot"] = (meta or {}).get("name") or self.slot_sel
                 pending["action"] = name
-                form.close()
+                panel.close()
             return callback
 
-        Form.open(self.root, "实例",
-                  info=self._info_slots(),
-                  fields=[{"key": "slot", "label": "实例",
-                    "choices": self.slot_labels or ["（无实例）"],
-                    "value": self.slot_var.get()}], submit="关闭",
-                  rows=((("切换 GUI", pick("gui")), ("切换 CLI", pick("cli"))),
-                        (("新建", pick("new")), ("换号", pick("switch"))),
-                        (("启动", pick("launch")), ("停止", pick("stop")),
-                         ("删除", pick("remove")))))
+        running = sum(1 for meta in self.slot_metas if meta.get("pids"))
+        labels = self.slot_labels or ["（无实例）"]
+        index = next((i for i, meta in enumerate(self.slot_metas)
+                      if meta.get("name") == self.slot_sel), -1)
+        panel = Panel(self.root, "实例", width=470)
+        panel.head([("共", "%d 个" % len(self.slot_metas)), ("运行", running),
+                    ("GUI", self.current.get("nickname") or "未登录"),
+                    ("CLI", self.cli_cur.get("nickname") or "未登录")])
+        panel.rule()
+        panel.field("实例", "slot", value=labels[index] if index >= 0 else "",
+                    choices=labels, width=22, right=brief(self.slot_meta()),
+                    on_change=changed)
+        panel.grid((("切换 GUI", pick("gui")), ("切换 CLI", pick("cli")),
+                    ("新建", pick("new")), ("换号", pick("switch"))), cols=4)
+        panel.grid((("启动", pick("launch")), ("停止", pick("stop")),
+                    ("删除", pick("remove"))), cols=4)
+        panel.wait()
         action = pending["action"]
         if action in ("switch", "launch", "stop", "remove"):
             self.slot_sel = pending["slot"]
@@ -1465,7 +1486,6 @@ class Window(object):
          "new": self.slot_new, "switch": self.slot_switch,
          "launch": self.slot_launch, "stop": self.slot_stop,
          "remove": self.slot_remove}.get(action, lambda: None)()
-
 
     def _auto_renew(self):
         """剩余 3 天以内的凭证自动续期，结果写日志。"""
