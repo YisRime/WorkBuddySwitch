@@ -43,6 +43,7 @@ class Activity:
     LOTTERY = "/activity/growth/lottery/summary"
     LOTTERY_DRAW = "/activity/growth/lottery/draw"
     REPORT = "/v2/report"
+    TRIAL = "/billing/ide/trial"
     TASKS = "/v2/activity/growth/tasks"
     TASK_ACCEPT = "/v2/activity/growth/tasks/accept"
     TASK_CLAIM = "/activity/growth/tasks/%s/claim"
@@ -338,6 +339,27 @@ class Activity:
         return {"ok": True, "remain": remain, "size": size, "used": used,
                 "packages": len(packages), "detail": packages,
                 "paid": paid, "updated": time.strftime("%H:%M:%S")}
+
+    @classmethod
+    def trial(cls, account, log=None):
+        """国际版试用加油包：幂等领取，已领过（14051）也算成功。"""
+        if realm_of(account) != "intl":
+            raise CoreError("试用加油包只对国际版账号开放")
+        if account.get("apiKey") or account.get("enterpriseId"):
+            raise CoreError("这个账号不能领试用加油包")
+        cfg = REALMS["intl"]
+        status, payload = cls._call(cfg["billing"] + cls.TRIAL,
+                                    cls.billing_headers(account), b"",
+                                    str(account.get("proxy") or ""), timeout=15)
+        code = payload.get("code")
+        msg = str(payload.get("msg") or status)
+        already = "14051" in json.dumps(payload) or "already" in msg.lower()
+        ok = code == 0 or already
+        say(log, "%s 试用加油包：%s" % (account.get("nickname")
+                                      or str(account.get("uid"))[:8],
+                                      "已领过" if already else msg))
+        return {"ok": ok, "state": "already" if already else ("claimed" if ok else "failed"),
+                "msg": msg}
 
     @classmethod
     def checkin_status(cls, account):

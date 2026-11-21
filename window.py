@@ -8,6 +8,7 @@ BTN_PAD 是控制区网格的尺寸约定：卡片左右边距、按钮间隙、
 import datetime
 import os
 import queue
+import re
 import shutil
 import threading
 import time
@@ -16,9 +17,15 @@ from concurrent.futures import ThreadPoolExecutor
 from tkinter import filedialog, ttk
 
 from api import Activity, Growth
+from bulk import Bulk
 from client import Client, Switcher
+from form import Form
+from probe import Probe
+from signup import Signup
 from slot import Slot
+from stats import Stats
 from store import Store
+from timer import LABELS as TIMER_LABELS, Timer
 from util import (APP_NAME, BACKUP, CLI_CMD, FONT, MONO, Process, as_dict, due_stamp,
                   fmt_num, monthly, norm_ts, realm_label)
 
@@ -240,8 +247,11 @@ class Window(object):
         self.btn_switch = None
         self.btn_switch_cli = None
         self.page = "cn"
+        self.signup_flow = None
+        self.timer = None
         self._build()
         self.reload()
+        self._start_timer()
         self.root.after(120, self._pump)
 
     def _build(self):
@@ -294,7 +304,20 @@ class Window(object):
                           ("获取", "query_activity"), ("同步", "sync_current"),
                           ("新建", "slot_new"), ("换号", "slot_switch"),
                           ("启动", "slot_launch"), ("停止", "slot_stop"),
-                          ("删除", "slot_remove"))),
+                          ("删除", "slot_remove"), ("试用", "do_trial"))),
+            Page("all",
+                 columns=("name", "realm", "state", "checkin", "credit", "expires"),
+                 titles={"name": "账号", "realm": "区域", "state": "状态",
+                         "checkin": "签到", "credit": "积分", "expires": "到期"},
+                 widths={"name": 138, "realm": 58, "state": 62,
+                         "checkin": 56, "credit": 62, "expires": 196},
+                 actions=(("注册", "do_signup"), ("导入", "do_import"),
+                          ("导出", "do_export"), ("收录", "import_current"),
+                          ("刷新", "reload"), ("续期", "refresh_credential"),
+                          ("获取", "query_activity"), ("签到", "do_checkin"),
+                          ("体检", "do_probe"), ("统计", "do_stats"),
+                          ("定时", "do_timer"), ("清理", "do_clean"),
+                          ("复制", "copy_accounts"), ("全选", "select_all"))),
         )
         for spec in defs:
             self.pages[spec.realm] = spec
@@ -435,7 +458,7 @@ class Window(object):
         holder = tk.Frame(parent, bg=Theme.BG)
         holder.pack(side="right")
         page.widgets["seg"] = {}
-        for key, text in (("cn", "国内版"), ("intl", "国际版")):
+        for key, text in (("cn", "国内版"), ("intl", "国际版"), ("all", "全部")):
             btn = ttk.Button(holder, text=text, style="Seg.TButton",
                              command=lambda k=key: self.switch_page(k))
             btn.pack(side="left")
@@ -534,6 +557,15 @@ class Window(object):
         self.menu.add_command(label="连登管家与抽奖", command=self.do_streak)
         self.menu.add_command(label="获取积分", command=self.query_activity)
         self.menu.add_separator()
+        self.menu.add_command(label="注册 / 手机号登录…", command=self.do_signup)
+        self.menu.add_command(label="导入账号…", command=self.do_import)
+        self.menu.add_command(label="导出账号…", command=self.do_export)
+        self.menu.add_command(label="账号体检", command=self.do_probe)
+        self.menu.add_command(label="积分报表", command=self.do_stats)
+        self.menu.add_command(label="定时任务…", command=self.do_timer)
+        self.menu.add_command(label="清理账号文件", command=self.do_clean)
+        self.menu.add_command(label="复制账号 JSONL", command=self.copy_accounts)
+        self.menu.add_separator()
         self.menu.add_command(label="全选账号", command=self.select_all)
         self.menu.add_command(label="收录当前登录", command=self.import_current)
         self.menu.add_command(label="恢复备份", command=self.restore_backup)
@@ -577,6 +609,19 @@ class Window(object):
                     else "没有可取积分的凭证")
         if action in ("slot_new", "slot_switch", "slot_launch", "slot_stop", "slot_remove"):
             return self._tip_slot(action.split("_", 1)[1])
+        hints = {
+            "do_signup": "用手机号 + 短信验证码注册 / 登录，成功后直接收进账号库",
+            "do_import": "从剪贴板、文件或本机客户端 auth 目录导入账号",
+            "do_export": "把选中（或全部）账号导出成 json / jsonl / csv / txt / zip",
+            "do_probe": "体检：本地字段 + 上游连通，标出过期与失效账号",
+            "do_stats": "按历史快照生成积分趋势报表（写到 data/Reports）",
+            "do_timer": "设置每天自动签到 / 活跃 / 任务 / 旅行 / 管家的时点",
+            "do_clean": "把坏文件与同 uid 重复文件挪进 data/.trash",
+            "copy_accounts": "把选中（或全部）账号复制成 JSONL 到剪贴板",
+            "do_trial": "国际版试用加油包（幂等，已领过按成功算）",
+        }
+        if action in hints:
+            return hints[action]
         labels = {"do_checkin": "Buddy 加油站签到", "do_report": "上报每日活跃点亮连登",
                   "do_tasks": "一键接取、点亮并领取成长任务", "do_travel": "猫猫旅行：领奖 / 派出",
                   "do_streak": "补签 / 礼包 / 档位兑换 / 抽奖"}
@@ -616,6 +661,8 @@ class Window(object):
     def realm_entries(self, realm=None):
         """本页的账号：按区域过滤，列表 / 计数 / 批量都只认这一份。"""
         realm = realm or self.page
+        if realm == "all":
+            return list(self.entries)
         return [e for e in self.entries if e.realm == realm]
 
     def reload(self):
@@ -663,7 +710,7 @@ class Window(object):
 
     def refresh_tree(self):
         """重画两页：各自表格、计数与选中集都保持独立，切页时不用再补数据。"""
-        for key in ("cn", "intl"):
+        for key in self.pages:
             self._refresh_page(self.pages[key])
         self.refresh_packs()
         self._sync_buttons()
@@ -730,6 +777,8 @@ class Window(object):
             except (OSError, ValueError, OverflowError):
                 expires = "—"
         cells = {"name": mark + entry.nickname,
+                 "realm": realm_label(entry.realm),
+                 "state": self._state_text(entry),
                  "checkin": self._checkin_text(entry, act),
                  "streak": "—" if act.get("days") is None else "%d 天" % self._num(act["days"], 0),
                  "energy": "—" if act.get("energy") is None else str(act["energy"]),
@@ -775,6 +824,20 @@ class Window(object):
                 str(row.get("name") or ""), fmt_num(row.get("remain"), 1),
                 fmt_num(row.get("size"), 1), when))
 
+    @staticmethod
+    def _state_text(entry):
+        """状态列：能切能跑 / 凭证过期 / 失效 / 静态 Key，四种之一。"""
+        if entry.data.get("apiKey"):
+            return "API Key" if entry.usable else "失效"
+        if not entry.usable:
+            return "失效"
+        stamp = norm_ts(entry.expires_at)
+        if stamp and stamp < time.time():
+            return "已过期"
+        if stamp and stamp - time.time() < 3 * 86400:
+            return "即将过期"
+        return "正常"
+
     def _slot_text(self, entry):
         """国际版页：这个账号当前挂在哪个槽位（GUI / CLI / 都没有）。"""
         marks = []
@@ -817,6 +880,10 @@ class Window(object):
         col = page.sort[0]
         act = self.activity.get(entry.uid) or {}
         credits = entry.credits or {}
+        if col == "realm":
+            return (realm_label(entry.realm), entry.nickname.lower())
+        if col == "state":
+            return (self._state_text(entry), entry.nickname.lower())
         if col == "expires":
             first = as_dict(credits.get("earliest_expiring"))
             stamp = due_stamp(first) if first else norm_ts(entry.expires_at)
@@ -916,6 +983,13 @@ class Window(object):
                 state = free and bool(meta) and bool(meta.get("pids"))
             elif action == "slot_remove":
                 state = free and bool(meta)
+            elif action in ("do_signup", "do_import", "do_export", "do_probe",
+                            "do_stats", "do_timer", "do_clean"):
+                state = free
+            elif action == "do_trial":
+                state = free and bool(self._intl_targets())
+            elif action == "copy_accounts":
+                state = free and bool(self.entries)
             elif action.startswith("do_"):
                 state = free and bool(self._cn_targets())
             else:
@@ -1174,9 +1248,15 @@ class Window(object):
         return [e for e in rows if e.usable and e.realm == "cn"
                 and not e.data.get("enterpriseId")]
 
-    def _cn_sweep(self, label, one, extra=None):
-        """国内版活动的唯一执行路径：逐个账号跑 one(entry)，汇总成功 / 失败。"""
-        targets = self._cn_targets()
+    def _intl_targets(self):
+        """国际版页的批量目标：能登录的国际版账号（含选中优先）。"""
+        chosen = self.selected_all()
+        rows = chosen or self.realm_entries("intl")
+        return [e for e in rows if e.usable and e.realm == "intl"]
+
+    def _cn_sweep(self, label, one, extra=None, targets=None):
+        """批量执行路径：逐个账号跑 one(entry)，汇总成功 / 失败。"""
+        targets = self._cn_targets() if targets is None else targets
         if self.busy:
             return
         if not targets:
@@ -1295,6 +1375,335 @@ class Window(object):
 
         self._cn_sweep("连登管家", one)
 
+
+    # ---------- 注册 / 导入 / 导出 / 体检 / 统计 / 定时 / 清理 ----------
+
+    def do_signup(self):
+        """注册或登录一个账号：手机号 + 验证码，成功后直接进账号库。"""
+        if self.busy:
+            return
+        self.signup_flow = None
+        self.signup_row = None
+        state = {"sending": False, "daily": False}
+
+        def send(form):
+            """发验证码：开链与发码都放后台，结果写回表单提示。"""
+            if state["sending"]:
+                self.log("验证码正在发送，稍等", "dim")
+                return
+            digits, _country = Signup.mobile(form.values().get("mobile") or "")
+            state["sending"] = True
+            form.note("正在连接上游、铺授权链…")
+
+            def work():
+                """后台：开链并请求验证码。"""
+                try:
+                    flow = Signup.start()
+                    info = Signup.send_code(flow, digits)
+                except Exception as exc:
+                    self.thread_log("发送验证码失败：%s" % exc)
+                    self.root.after(0, lambda: form.note("发送失败：%s" % exc))
+                else:
+                    self.signup_flow = flow
+                    self.thread_log("验证码已发到 %s（%d 秒内有效）"
+                                    % (info["phone"], info["expires_in"]))
+                    self.root.after(0, lambda: form.note(
+                        "验证码已发出，填进「验证码」再点「登录并收录」"))
+                finally:
+                    state["sending"] = False
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def relay(form):
+            """官方页面接力：浏览器里登录，后台轮询换凭证。"""
+            state["daily"] = str(form.values().get("daily") or "否") == "是"
+            form.note("正在打开浏览器登录页…")
+
+            def work():
+                """后台：拿 state → 开浏览器 → 轮询凭证。"""
+                try:
+                    import webbrowser
+                    start = Signup.official_start()
+                    webbrowser.open(start["url"])
+                    self.thread_log("已在浏览器打开官方登录页；登录完成后自动收回凭证")
+                    row = Signup.official_poll(start["state"], timeout=180,
+                                               log=self.thread_log)
+                except Exception as exc:
+                    self.thread_log("浏览器登录失败：%s" % exc)
+                    self.root.after(0, lambda: form.note("失败：%s" % exc))
+                else:
+                    self.signup_row = row
+                    self.root.after(0, form.close)
+
+            threading.Thread(target=work, daemon=True).start()
+
+        values = Form.open(
+            self.root, "注册 / 手机号登录",
+            [{"key": "mobile", "label": "手机号", "hint": "国内 11 位；支持 86 / 852 / 853"},
+             {"key": "code", "label": "验证码", "hint": "6 位数字，点「发送验证码」后填"},
+             {"key": "daily", "label": "注册后跑日常", "choices": ["否", "是"], "value": "否",
+              "hint": "签到 / 猫咪旅行 / 成长任务（仅国内版，耗时较长）"}],
+            note="验证码由腾讯发给账号主人本人，本工具不碰短信内容，只把登录协议跑完"
+                 "并把凭证收进账号库。",
+            submit="登录并收录", buttons=(("发送验证码", send), ("浏览器登录", relay)))
+        if self.signup_row is not None:
+            row = self.signup_row
+            self.signup_row = None
+
+            def save():
+                """浏览器登录已经拿到凭证：直接进账号库，按需跑一遍日常。"""
+                path = self.store.upsert(row)
+                if state["daily"]:
+                    self._post_signup(row)
+                return {"nickname": row["nickname"], "path": os.path.basename(path)}
+
+            self._run("注册", save)
+            return
+        if not values:
+            return
+        code = str(values.get("code") or "").strip()
+        if not re.fullmatch(r"\d{6}", code):
+            self.log("验证码要 6 位数字", "warn")
+            return
+        flow = self.signup_flow
+        if flow is None:
+            self.log("还没有发过验证码：先在表单里点「发送验证码」", "warn")
+            return
+
+        def work():
+            """后台：校验验证码、换凭证、写进账号库，按需跑一遍日常。"""
+            row = Signup.verify(flow, code, log=self.thread_log)
+            path = self.store.upsert(row)
+            if state["daily"]:
+                self._post_signup(row)
+            return {"nickname": row["nickname"], "path": os.path.basename(path)}
+
+        self._run("注册", work)
+
+    def do_import(self):
+        """导入账号：粘贴文本 / 选文件 / 扫本机客户端 auth 目录。"""
+        if self.busy:
+            return
+        mode = Form.choice(
+            self.root, "导入账号", "从哪里导入",
+            ["粘贴文本（JSON / JSONL / CSV / 每行一个 token）",
+             "选择文件（json / jsonl / info / csv / txt / zip）",
+             "扫描本机客户端 auth 目录（*.info）"])
+        if not mode:
+            return
+        text, path = "", ""
+        if mode.startswith("粘贴"):
+            text = Form.text(self.root, "粘贴账号", "内容",
+                             note="合集包、JSON 数组、JSONL（一行一个凭证）、CSV 与每行 "
+                                  "token 都认。")
+            if not text:
+                return
+        elif mode.startswith("选择"):
+            path = filedialog.askopenfilename(
+                title="选择账号文件",
+                filetypes=[("账号文件", "*.json *.jsonl *.info *.csv *.txt *.zip"),
+                           ("全部文件", "*.*")])
+            if not path:
+                return
+
+        def work():
+            """后台：解析并合并进账号库，返回新增 / 更新 / 跳过明细。"""
+            if mode.startswith("扫描"):
+                rows, notes = Bulk.scan_client(log=self.thread_log)
+            elif path:
+                rows, notes = Bulk.read(path)
+            else:
+                rows, notes = Bulk.parse(text)
+            result = Bulk.merge(self.store, rows)
+            result["notes"] = notes
+            return result
+
+        self._run("导入", work)
+
+    def do_export(self):
+        """导出账号：选格式与脱敏，再选保存位置。"""
+        if self.busy:
+            return
+        targets = list(self.selected_all()) or list(self.entries)
+        if not targets:
+            self.log("没有可导出的账号", "warn")
+            return
+        values = Form.open(
+            self.root, "导出账号",
+            [{"key": "fmt", "label": "格式",
+              "choices": ["jsonl", "json", "csv", "txt", "zip", "info"], "value": "jsonl",
+              "hint": "jsonl = 一行一个客户端 .info，别的工具能直接导入"},
+             {"key": "redact", "label": "脱敏", "choices": ["否", "是"], "value": "否"}],
+            note="默认导出选中（没选中就全部）；脱敏会打码 token / 昵称 / uid，"
+                 "适合截图或发给别人。")
+        if not values:
+            return
+        fmt = str(values.get("fmt") or "jsonl")
+        redact = str(values.get("redact") or "否") == "是"
+        if fmt == "info" and len(targets) != 1:
+            self.log("单账号 .info 只能选中一个账号再导出", "warn")
+            return
+        default = "workbuddy-accounts-%s.%s" % (time.strftime("%Y%m%d-%H%M"), fmt)
+        path = filedialog.asksaveasfilename(
+            title="导出到", initialfile=default, defaultextension="." + fmt,
+            filetypes=[(fmt, "*." + fmt), ("全部文件", "*.*")])
+        if not path:
+            return
+        rows = [dict(entry.data) for entry in targets]
+
+        def work():
+            """后台：写文件，返回路径与账号数。"""
+            saved, count = Bulk.write(path, rows, redact=redact)
+            return {"path": saved, "count": count, "redact": redact}
+
+        self._run("导出", work)
+
+    def do_trial(self):
+        """国际版试用加油包：幂等领取，已领过也记成功。"""
+        def one(entry):
+            """给一个账号领试用，失败返回原因。"""
+            res = Activity.trial(entry.data, log=self.thread_log)
+            return None, ("" if res["ok"] else res["msg"])
+
+        self._cn_sweep("试用", one, targets=self._intl_targets())
+
+    def do_probe(self):
+        """账号体检：本地字段 + 上游连通，结果写日志。"""
+        targets = self._targets()
+        if not targets:
+            self.log("没有体检目标", "warn")
+            return
+
+        def work():
+            """后台：逐号体检（串行，别把上游打出风控）。"""
+            return Probe.run(targets, log=self.thread_log)
+
+        self._run("体检", work)
+
+    def do_stats(self):
+        """积分报表：按历史快照生成 Markdown，并给出汇总。"""
+        if not self.entries:
+            self.log("账号库是空的", "warn")
+            return
+
+        def work():
+            """后台：落一份报表到 data/Reports。"""
+            path = Stats.save_report(self.entries, days=7)
+            total = 0.0
+            for entry in self.entries:
+                try:
+                    total += float((entry.credits or {}).get("remain") or 0)
+                except (TypeError, ValueError):
+                    pass
+            return {"path": path, "total": total}
+
+        self._run("统计", work)
+
+    def do_timer(self):
+        """定时任务：开关、每天时点、动作与补跑策略。"""
+        section = Timer.config()
+        values = Form.open(
+            self.root, "定时任务",
+            [{"key": "enabled", "label": "启用", "choices": ["开", "关"],
+              "value": "开" if section.get("enabled") else "关"},
+             {"key": "time", "label": "每天时点", "value": section.get("time") or "09:00",
+              "hint": "24 小时制 HH:MM"},
+             {"key": "actions", "label": "动作",
+              "value": ",".join(section.get("actions") or ["checkin", "report"]),
+              "hint": "可选 checkin / report / tasks / travel / streak，逗号分隔"},
+             {"key": "catchup", "label": "错过补跑", "choices": ["开", "关"],
+              "value": "开" if section.get("catchup", True) else "关"}],
+            note="只作用于本机账号库里的国内版个人号；程序要开着，动作在后台线程跑，"
+                 "结果写日志。")
+        if not values:
+            return
+        clock = str(values.get("time") or "").strip()
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", clock):
+            self.log("时点要写成 HH:MM（例如 09:00）", "warn")
+            return
+        picked = [item for item in re.split(r"[,，\s]+", str(values.get("actions") or ""))
+                  if item]
+        bad = [item for item in picked if item not in TIMER_LABELS]
+        if bad:
+            self.log("不认识的动作：%s（可选 %s）" % ("、".join(bad), "、".join(TIMER_LABELS)),
+                     "warn")
+            return
+        section = Timer.configure(enabled=str(values.get("enabled")) == "开", time=clock,
+                                  actions=picked or ["checkin", "report"],
+                                  catchup=str(values.get("catchup")) == "开")
+        self._start_timer()
+        self.log("定时任务已%s：每天 %s 做 %s%s" % (
+            "启用" if section.get("enabled") else "关闭", section.get("time"),
+            "、".join(TIMER_LABELS.get(item, item) for item in section.get("actions") or []),
+            "（错过当天会补跑）" if section.get("catchup") else ""), "ok")
+
+    def do_clean(self):
+        """清理账号目录：坏文件与同 uid 重复文件挪进 data/.trash。"""
+        if self.busy:
+            return
+
+        def work():
+            """后台：扫描并搬运问题文件。"""
+            return Bulk.clean(self.store)
+
+        self._run("清理", work)
+
+    def copy_accounts(self):
+        """把选中（或全部）账号复制成 JSONL 到剪贴板。"""
+        rows = [dict(entry.data)
+                for entry in (list(self.selected_all()) or list(self.entries))]
+        if not rows:
+            self.log("没有可复制的账号", "warn")
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(Bulk.clipboard(rows))
+        except Exception as exc:
+            self.log("复制失败：%s" % exc, "err")
+            return
+        self.log("已复制 %d 个账号的 JSONL 到剪贴板" % len(rows), "ok")
+
+    def _post_signup(self, row):
+        """新账号收进来后按需跑一遍国内版日常：签到 → 猫咪旅行 → 成长任务。"""
+        if row.get("realm") != "cn" or row.get("enterpriseId"):
+            self.thread_log("国际版 / 企业号没有成长体系，跳过日常")
+            return
+        try:
+            Activity.checkin(row, log=self.thread_log)
+        except Exception as exc:
+            self.thread_log("签到失败：%s" % exc)
+        try:
+            Growth.travel(row)
+        except Exception as exc:
+            self.thread_log("猫咪旅行失败：%s" % exc)
+        try:
+            Growth.run(row, self.thread_log)
+        except Exception as exc:
+            self.thread_log("成长任务失败：%s" % exc)
+
+    def _start_timer(self):
+        """按当前设置重建定时调度线程；动作直接调活动接口。"""
+        if self.timer is not None:
+            try:
+                self.timer.stop()
+            except Exception:
+                pass
+        actions = {
+            "checkin": lambda entry, log: Activity.checkin(entry.data, log=log),
+            "report": lambda entry, log: Activity.report(entry.data, log=log),
+            "tasks": lambda entry, log: Growth.run(entry.data, log),
+            "travel": lambda entry, log: Growth.travel(entry.data),
+            "streak": lambda entry, log: Growth.streak(entry.data, log),
+        }
+        self.timer = Timer(actions, self._timer_targets, log=self.thread_log)
+        self.timer.start()
+
+    def _timer_targets(self):
+        """定时任务的目标：国内版个人号（纯数据，可在后台线程调用）。"""
+        return [entry for entry in self.entries
+                if entry.usable and entry.realm == "cn"
+                and not entry.data.get("enterpriseId")]
+
     def _run(self, label, func):
         """后台线程跑一个动作，忙时拒绝重复触发；结果经队列回到界面。"""
         if self.busy:
@@ -1348,6 +1757,16 @@ class Window(object):
                         self.store.save_activity(uid, info)
                     except Exception as exc:
                         self.log("活动结果写回 %s 失败：%s" % (uid[:8], exc), "warn")
+                    try:
+                        Stats.record(uid, info)
+                    except Exception:
+                        pass
+            if isinstance(result, dict):
+                for item in (result.get("bad") or [])[:8]:
+                    if isinstance(item, str):
+                        self.log("  ! " + item, "warn")
+                for item in (result.get("notes") or [])[:8]:
+                    self.log("  " + str(item), "dim")
             text = self._summary(label, result)
             self.log("%s完成%s" % (label, "：" + text if text else ""), "ok")
             slot = result.get("slot") if isinstance(result, dict) else ""
@@ -1390,7 +1809,7 @@ class Window(object):
         if label == "获取积分":
             text = "%d 个账号" % (result.get("count") or 0)
             return text + ("，%d 个失败" % result["bad"] if result.get("bad") else "")
-        if label in ("Buddy 加油站签到", "每日活跃", "猫猫旅行"):
+        if label in ("Buddy 加油站签到", "每日活跃", "猫猫旅行", "试用"):
             text = "%d 个成功" % (result.get("ok") or 0)
             bad = result.get("bad") or []
             return text + ("，%d 个失败" % len(bad) if bad else "")
@@ -1403,6 +1822,27 @@ class Window(object):
             return "已重启" if result.get("started") else "客户端未启动"
         if label == "收录":
             return "%s → %s" % (result.get("nickname") or "", result.get("path") or "")
+        if label == "注册":
+            return "%s → %s" % (result.get("nickname") or "", result.get("path") or "")
+        if label == "导入":
+            return "新增 %d，更新 %d，跳过 %d，失败 %d" % (
+                len(result.get("added") or []), len(result.get("updated") or []),
+                len(result.get("skipped") or []), len(result.get("bad") or []))
+        if label == "导出":
+            return "%d 个账号%s → %s" % (result.get("count") or 0,
+                                        "（已脱敏）" if result.get("redact") else "",
+                                        result.get("path") or "")
+        if label == "体检":
+            counts = result.get("counts") or {}
+            return "正常 %d，注意 %d，过期 %d，失效 %d" % (
+                counts.get("ok", 0), counts.get("warn", 0),
+                counts.get("expired", 0), counts.get("invalid", 0))
+        if label == "统计":
+            return "合计剩余 %s · %s" % (fmt_num(result.get("total"), 0),
+                                        result.get("path") or "")
+        if label == "清理":
+            return "移走 %d 个文件 → %s" % (result.get("moved") or 0,
+                                          result.get("trash") or "")
         return ""
 
     def log(self, message, level="info"):
