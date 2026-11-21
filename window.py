@@ -23,12 +23,9 @@ from bulk import Bulk
 from client import Client, Switcher
 from form import Form
 from ide import Ide
-from probe import Probe
 from signup import Signup
 from slot import Slot
-from stats import Stats
 from store import Store
-from timer import LABELS as TIMER_LABELS, Settings, Timer
 from usage import Usage
 from util import (APP_NAME, BACKUP, CLI_CMD, FONT, MONO, Prefs, Process, as_dict,
                   due_stamp, fmt_num, monthly, norm_ts, realm_label)
@@ -253,6 +250,7 @@ class Window(object):
         self.slot_boxes = {}
         self.slot_labels = []
         self.page = "all"
+        self.realm_filter = ""
         self.signup_flow = None
         self._build()
         self.reload()
@@ -286,43 +284,24 @@ class Window(object):
         body.rowconfigure(0, weight=1)
 
         defs = (
-            Page("cn",
-                 columns=("name", "checkin", "streak", "energy", "credit", "expires"),
-                 titles={"name": "账号", "checkin": "签到", "streak": "连登",
-                         "energy": "能量", "credit": "积分", "expires": "最早到期"},
-                 widths={"name": 150, "checkin": 54, "streak": 50,
-                         "energy": 50, "credit": 62, "expires": 196},
+            Page("all",
+                 columns=("name", "realm", "state", "checkin", "streak", "energy",
+                          "credit", "expires"),
+                 titles={"name": "账号", "realm": "区域", "state": "状态",
+                         "checkin": "签到", "streak": "连登", "energy": "能量",
+                         "credit": "积分", "expires": "到期"},
+                 widths={"name": 132, "realm": 54, "state": 56, "checkin": 52,
+                         "streak": 46, "energy": 46, "credit": 58, "expires": 176},
                  actions=(("收录", "import_current"), ("恢复", "restore_backup"),
                           ("刷新", "reload"), ("续期", "refresh_credential"),
                           ("获取", "query_activity"), ("签到", "do_checkin"),
                           ("活跃", "do_report"), ("任务", "do_tasks"),
                           ("旅行", "do_travel"), ("管家", "do_streak"),
-                          ("新建", "slot_new"), ("换号", "slot_switch"),
-                          ("启动", "slot_launch"), ("停止", "slot_stop"),
-                          ("删除", "slot_remove"))),
-            Page("intl",
-                 columns=("name", "credit", "packages", "expires", "slots"),
-                 titles={"name": "账号", "credit": "积分", "packages": "包数",
-                         "expires": "到期", "slots": "登录槽位"},
-                 widths={"name": 152, "credit": 68, "packages": 56,
-                         "expires": 196, "slots": 96},
-                 actions=(("收录", "import_current"), ("恢复", "restore_backup"),
-                          ("刷新", "reload"), ("续期", "refresh_credential"),
-                          ("获取", "query_activity"), ("同步", "sync_current"),
-                          ("新建", "slot_new"), ("换号", "slot_switch"),
-                          ("启动", "slot_launch"), ("停止", "slot_stop"),
-                          ("删除", "slot_remove"), ("试用", "do_trial"))),
-            Page("all",
-                 columns=("name", "realm", "state", "checkin", "credit", "expires"),
-                 titles={"name": "账号", "realm": "区域", "state": "状态",
-                         "checkin": "签到", "credit": "积分", "expires": "到期"},
-                 widths={"name": 138, "realm": 58, "state": 62,
-                         "checkin": 56, "credit": 62, "expires": 196},
-                 actions=(("注册", "do_signup"), ("导入", "do_import"),
-                          ("导出", "do_export"), ("收录", "import_current"),
-                          ("刷新", "reload"), ("续期", "refresh_credential"),
-                          ("获取", "query_activity"), ("签到", "do_checkin"),
-                          ("复制", "copy_accounts"))),
+                          ("试用", "do_trial"), ("注册", "do_signup"),
+                          ("导入", "do_import"), ("导出", "do_export"),
+                          ("复制", "copy_accounts"), ("新建", "slot_new"),
+                          ("换号", "slot_switch"), ("启动", "slot_launch"),
+                          ("停止", "slot_stop"), ("删除", "slot_remove"))),
         )
         for spec in defs:
             self.pages[spec.realm] = spec
@@ -396,7 +375,7 @@ class Window(object):
             area.columnconfigure(col, weight=1, uniform="act")
 
         row = self._button_grid(area, 0, page)
-        if page.realm == "intl":
+        if page.realm in ("intl", "all"):
             self.cur_lbl, self.btn_switch = self._current_line(
                 area, row, "GUI", (FONT, 10, "bold"), Theme.TEXT,
                 self.switch_desktop, lambda: self._tip("switch_desktop"))
@@ -444,8 +423,6 @@ class Window(object):
             self.tip(btn, lambda a=action, p=page: self._tip(a, p))
             page.widgets["buttons"][action] = btn
         row, col = top + len(page.actions) // COLS, len(page.actions) % COLS
-        if page.realm == "all":
-            return row + (1 if col else 0)
         if col == 0:
             row, col = row + 1, 0
         if not hasattr(self, "slot_var"):
@@ -461,15 +438,15 @@ class Window(object):
         return row + 1
 
     def _page_switch(self, parent, page):
-        """切页按钮：顶在搜索框与账号数量右边，高宽对齐输入框那一行。"""
+        """区域筛选：国内版 / 国际版两个 chip，再点一次取消筛选。"""
         holder = tk.Frame(parent, bg=Theme.BG)
         holder.pack(side="right")
         page.widgets["seg"] = {}
-        for key, text in (("cn", "国内版"), ("intl", "国际版"), ("all", "全部")):
+        for key, text in (("cn", "国内版"), ("intl", "国际版")):
             btn = ttk.Button(holder, text=text, style="Seg.TButton",
                              command=lambda k=key: self.switch_page(k))
             btn.pack(side="left")
-            self.tip(btn, "切换到%s账号页" % text)
+            self.tip(btn, text + "账号")
             page.widgets["seg"][key] = btn
 
     def _on_click(self, event):
@@ -519,19 +496,16 @@ class Window(object):
         self.log_text.tag_configure("warn", foreground=Theme.WARN)
         self.log_text.tag_configure("err", foreground=Theme.ERR)
 
-    def switch_page(self, key):
-        """切到国内版 / 国际版 / 全部页：只显示该页的控件，另两页整块隐藏。"""
-        if key not in self.pages:
-            return
-        self.page = key
-        for name, spec in self.pages.items():
-            holder = spec.widgets["list"]
-            if name == key:
-                holder.grid()
-            else:
-                holder.grid_remove()
-            for seg, btn in (spec.widgets.get("seg") or {}).items():
-                btn.configure(style="SegOn.TButton" if seg == key else "Seg.TButton")
+    def switch_page(self, key=None):
+        """区域筛选：点同一个 key 取消，None 表示全部。"""
+        if key in ("cn", "intl"):
+            self.realm_filter = "" if self.realm_filter == key else key
+        elif key is None:
+            self.realm_filter = ""
+        seg = self.page_spec.widgets.get("seg") or {}
+        for name, btn in seg.items():
+            btn.configure(style="SegOn.TButton" if name == self.realm_filter
+                          else "Seg.TButton")
         self.refresh_tree()
         self.refresh_packs()
         self._sync_buttons()
@@ -662,9 +636,10 @@ class Window(object):
     def realm_entries(self, realm=None):
         """本页的账号：按区域过滤，列表 / 计数 / 批量都只认这一份。"""
         realm = realm or self.page
-        if realm == "all":
+        wanted = realm if realm in ("cn", "intl") else self.realm_filter
+        if not wanted:
             return list(self.entries)
-        return [e for e in self.entries if e.realm == realm]
+        return [e for e in self.entries if e.realm == wanted]
 
     def reload(self):
         """重扫账号目录并刷新两个槽位显示，读取告警写进日志。"""
@@ -1614,75 +1589,8 @@ class Window(object):
 
         self._cn_sweep("试用", one, targets=self._intl_targets())
 
-    def do_probe(self):
-        """账号体检：本地字段 + 上游连通，结果写日志。"""
-        targets = self._targets()
-        if not targets:
-            self.log("没有体检目标", "warn")
-            return
 
-        def work():
-            """后台：逐号体检（串行，别把上游打出风控）。"""
-            return Probe.run(targets, log=self.thread_log)
 
-        self._run("体检", work)
-
-    def do_stats(self):
-        """积分报表：按历史快照生成 Markdown，并给出汇总。"""
-        if not self.entries:
-            self.log("账号库是空的", "warn")
-            return
-
-        def work():
-            """后台：落一份报表到 data/Reports。"""
-            path = Stats.save_report(self.entries, days=7)
-            total = 0.0
-            for entry in self.entries:
-                try:
-                    total += float((entry.credits or {}).get("remain") or 0)
-                except (TypeError, ValueError):
-                    pass
-            return {"path": path, "total": total}
-
-        self._run("统计", work)
-
-    def do_timer(self):
-        """定时任务：开关、每天时点、动作与补跑策略。"""
-        section = Timer.config()
-        values = Form.open(
-            self.root, "定时任务",
-            [{"key": "enabled", "label": "启用", "choices": ["开", "关"],
-              "value": "开" if section.get("enabled") else "关"},
-             {"key": "time", "label": "每天时点", "value": section.get("time") or "09:00",
-              "hint": "24 小时制 HH:MM"},
-             {"key": "actions", "label": "动作",
-              "value": ",".join(section.get("actions") or ["checkin", "report"]),
-              "hint": "可选 checkin / report / tasks / travel / streak，逗号分隔"},
-             {"key": "catchup", "label": "错过补跑", "choices": ["开", "关"],
-              "value": "开" if section.get("catchup", True) else "关"}],
-            note="只作用于本机账号库里的国内版个人号；程序要开着，动作在后台线程跑，"
-                 "结果写日志。")
-        if not values:
-            return
-        clock = str(values.get("time") or "").strip()
-        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", clock):
-            self.log("时点要写成 HH:MM（例如 09:00）", "warn")
-            return
-        picked = [item for item in re.split(r"[,，\s]+", str(values.get("actions") or ""))
-                  if item]
-        bad = [item for item in picked if item not in TIMER_LABELS]
-        if bad:
-            self.log("不认识的动作：%s（可选 %s）" % ("、".join(bad), "、".join(TIMER_LABELS)),
-                     "warn")
-            return
-        section = Timer.configure(enabled=str(values.get("enabled")) == "开", time=clock,
-                                  actions=picked or ["checkin", "report"],
-                                  catchup=str(values.get("catchup")) == "开")
-        self._start_timer()
-        self.log("定时任务已%s：每天 %s 做 %s%s" % (
-            "启用" if section.get("enabled") else "关闭", section.get("time"),
-            "、".join(TIMER_LABELS.get(item, item) for item in section.get("actions") or []),
-            "（错过当天会补跑）" if section.get("catchup") else ""), "ok")
 
     def do_usage(self):
         """本地用量报表：扫客户端自己记的 token / 积分（只读、不联网）。"""
@@ -1693,56 +1601,6 @@ class Window(object):
 
         self._run("用量", work)
 
-    def do_settings(self):
-        """设置：接码平台、默认导出目录、启动后自动体检。"""
-        prefs = Settings.load()
-        sms = as_dict(prefs.get("sms"))
-        ui = as_dict(prefs.get("ui"))
-        values = Form.open(
-            self.root, "设置",
-            [{"key": "sms_base", "label": "接码平台地址",
-              "value": sms.get("base") or "https://www.jichisms.com"},
-             {"key": "sms_token", "label": "接码平台 token", "secret": True,
-              "value": sms.get("token") or ""},
-             {"key": "sms_engine", "label": "接码引擎", "choices": ["a", "b"],
-              "value": sms.get("engine") or "a"},
-             {"key": "sms_project", "label": "接码项目 ID",
-              "value": sms.get("project_id") or "139372"},
-             {"key": "sms_wait", "label": "等码秒数",
-              "value": str(sms.get("wait") or 90)},
-             {"key": "export_dir", "label": "默认导出目录",
-              "value": ui.get("export_dir") or ""},
-             {"key": "auto_probe", "label": "启动后自动体检", "choices": ["关", "开"],
-              "value": "开" if ui.get("auto_probe") else "关"}],
-            note="接码平台只服务自动注册：填了 token 才会用，留空就手动填验证码；"
-                 "导出目录留空则每次弹保存框。")
-        if not values:
-            return
-        wait = str(values.get("sms_wait") or "90").strip()
-        if not wait.isdigit():
-            self.log("等码秒数要填数字", "warn")
-            return
-        doc = Settings.load()
-        doc["sms"] = {"base": str(values.get("sms_base") or "").strip(),
-                      "token": str(values.get("sms_token") or "").strip(),
-                      "engine": str(values.get("sms_engine") or "a"),
-                      "project_id": str(values.get("sms_project") or "").strip(),
-                      "wait": int(wait)}
-        doc["ui"] = {"export_dir": str(values.get("export_dir") or "").strip(),
-                     "auto_probe": str(values.get("auto_probe")) == "开"}
-        Settings.save(doc)
-        self.log("设置已保存到 data/settings.json", "ok")
-
-    def do_clean(self):
-        """清理账号目录：坏文件与同 uid 重复文件挪进 data/.trash。"""
-        if self.busy:
-            return
-
-        def work():
-            """后台：扫描并搬运问题文件。"""
-            return Bulk.clean(self.store)
-
-        self._run("清理", work)
 
     def copy_accounts(self):
         """把选中（或全部）账号复制成 JSONL 到剪贴板。"""
@@ -1777,37 +1635,6 @@ class Window(object):
         except Exception as exc:
             self.thread_log("成长任务失败：%s" % exc)
 
-    def _auto_probe(self):
-        """启动后自动体检（设置里打开才做，且账号库非空）。"""
-        try:
-            wanted = as_dict(Settings.load().get("ui")).get("auto_probe")
-        except Exception:
-            wanted = False
-        if wanted and self.entries and not self.busy:
-            self.do_probe()
-
-    def _start_timer(self):
-        """按当前设置重建定时调度线程；动作直接调活动接口。"""
-        if self.timer is not None:
-            try:
-                self.timer.stop()
-            except Exception:
-                pass
-        actions = {
-            "checkin": lambda entry, log: Activity.checkin(entry.data, log=log),
-            "report": lambda entry, log: Activity.report(entry.data, log=log),
-            "tasks": lambda entry, log: Growth.run(entry.data, log),
-            "travel": lambda entry, log: Growth.travel(entry.data),
-            "streak": lambda entry, log: Growth.streak(entry.data, log),
-        }
-        self.timer = Timer(actions, self._timer_targets, log=self.thread_log)
-        self.timer.start()
-
-    def _timer_targets(self):
-        """定时任务的目标：国内版个人号（纯数据，可在后台线程调用）。"""
-        return [entry for entry in self.entries
-                if entry.usable and entry.realm == "cn"
-                and not entry.data.get("enterpriseId")]
 
     def _run(self, label, func):
         """后台线程跑一个动作，忙时拒绝重复触发；结果经队列回到界面。"""

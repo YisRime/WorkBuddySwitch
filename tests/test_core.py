@@ -15,9 +15,6 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bulk
-import probe
-import stats
-import timer
 from store import Store
 
 
@@ -126,88 +123,6 @@ class BulkTest(unittest.TestCase):
         self.assertEqual(result["moved"], 2)
         self.assertTrue(os.path.isfile(good))
 
-
-class StatsTest(unittest.TestCase):
-    """历史快照的写入与汇总。"""
-
-    def setUp(self):
-        """临时 history 文件。"""
-        self.tmp = tempfile.mkdtemp(prefix="wb-stats-")
-        self.path = os.path.join(self.tmp, "history.jsonl")
-
-    def tearDown(self):
-        """清理。"""
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_record_and_trend(self):
-        """写两天快照后能算出每天的变化。"""
-        stats.Stats.record("u1", {"remain": 900, "size": 1000}, path=self.path)
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"at": int(time.time()) - 86400, "uid": "u1",
-                                 "remain": 1000, "size": 1000}) + "\n")
-        points = stats.Stats.daily("u1", 7, path=self.path)
-        self.assertEqual(len(points), 2)
-        trend = stats.Stats.trend("u1", 7, path=self.path)
-        self.assertEqual(trend["delta"], -100)
-        self.assertEqual(trend["perDay"], -100)
-
-
-class TimerTest(unittest.TestCase):
-    """定时判断：到点、去重、补跑。"""
-
-    def setUp(self):
-        """把设置文件指到临时目录。"""
-        self.tmp = tempfile.mkdtemp(prefix="wb-timer-")
-        self.saved = timer.SETTINGS
-        timer.SETTINGS = os.path.join(self.tmp, "settings.json")
-
-    def tearDown(self):
-        """还原设置路径。"""
-        timer.SETTINGS = self.saved
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    @staticmethod
-    def _clock(hour, minute):
-        """造一个指定时分的时间结构。"""
-        return time.localtime(time.mktime((2026, 11, 21, hour, minute, 0, 0, 0, -1)))
-
-    def test_due(self):
-        """没过点不跑；过点跑一次；跑过就记进 last。"""
-        timer.Timer.configure(enabled=True, time="09:00", actions=["checkin"],
-                              catchup=True, last={})
-        scheduler = timer.Timer({"checkin": lambda entry, log: None}, lambda: [])
-        self.assertEqual(scheduler.due(now=self._clock(8, 59)), [])
-        self.assertEqual(scheduler.due(now=self._clock(9, 1)), ["checkin"])
-        timer.Timer.configure(last={time.strftime("%Y-%m-%d"): ["checkin"]})
-        self.assertEqual(scheduler.due(now=self._clock(9, 2)), [])
-
-    def test_disabled_and_catchup(self):
-        """关掉就不跑；补跑关掉且已过点时也不跑。"""
-        timer.Timer.configure(enabled=False, time="09:00", actions=["checkin"], last={})
-        scheduler = timer.Timer({"checkin": lambda entry, log: None}, lambda: [])
-        self.assertEqual(scheduler.due(now=self._clock(10, 0)), [])
-        timer.Timer.configure(enabled=True, catchup=False, last={})
-        self.assertEqual(scheduler.due(now=self._clock(10, 0)), [])
-
-
-class ProbeTest(unittest.TestCase):
-    """本地体检分支（不联网）。"""
-
-    def test_local_checks(self):
-        """缺 refreshToken 与已过期都能报出来。"""
-        tmp = tempfile.mkdtemp(prefix="wb-probe-")
-        try:
-            store = Store(tmp)
-            path = store.upsert({"uid": "u1", "nickname": "甲",
-                                 "accessToken": token("u1", exp=int(time.time()) - 10),
-                                 "refreshToken": ""})
-            entry = store.load()[0][0]
-            levels = [level for level, _text in probe.Probe.local(entry)]
-            self.assertIn(probe.EXPIRED, levels)
-            self.assertIn(probe.WARN, levels)
-            self.assertTrue(path)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class SignupTest(unittest.TestCase):
