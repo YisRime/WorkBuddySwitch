@@ -299,7 +299,7 @@ class Window(object):
                           ("获取", "query_activity"), ("签到", "do_checkin"),
                           ("活跃", "do_report"), ("任务", "do_tasks"),
                           ("旅行", "do_travel"), ("管家", "do_streak"),
-                          ("试用", "do_trial"), ("复制", "copy_accounts"))),
+                          ("试用", "do_trial"), ("导入", "import_current"))),
         )
         for spec in defs:
             self.pages[spec.realm] = spec
@@ -518,12 +518,11 @@ class Window(object):
         self.menu.add_command(label="获取积分", command=self.query_activity)
         self.menu.add_separator()
         self.menu.add_command(label="注册 / 手机号登录…", command=self.do_signup)
-        self.menu.add_command(label="导入账号…", command=self.do_import)
+        self.menu.add_command(label="导入文本…", command=self.import_text)
         self.menu.add_command(label="从编辑器导入（VS Code / IDE / JetBrains）",
                               command=self.import_ide)
         self.menu.add_command(label="导出账号…", command=self.do_export)
         self.menu.add_command(label="请求用量（本地会话）", command=self.do_usage)
-        self.menu.add_command(label="复制账号 JSONL", command=self.copy_accounts)
         self.menu.add_separator()
         self.menu.add_command(label="收录当前登录", command=self.import_current)
         self.menu.add_command(label="复制 UID", command=self.copy_uid)
@@ -566,13 +565,12 @@ class Window(object):
         if action in ("slot_new", "slot_switch", "slot_launch", "slot_stop", "slot_remove"):
             return self._tip_slot(action.split("_", 1)[1])
         hints = {
-            "do_account": "收录 / 注册 / 导入 / 导出",
+            "do_account": "注册 / 导入 / 导出",
             "do_slots": "登录槽位与实例",
             "do_signup": "手机号注册 / 登录",
             "do_import": "从文本、文件或客户端导入账号",
             "do_export": "导出选中（或全部）账号",
-            "copy_accounts": "复制选中（或全部）账号",
-            "do_trial": "领取国际版试用加油包",
+                        "do_trial": "领取国际版试用加油包",
         }
         if action in hints:
             return hints[action]
@@ -1430,7 +1428,7 @@ class Window(object):
         self._run("注册", work)
 
     def do_account(self):
-        """账号二级面板：收录 / 注册 / 导入 / 导出。"""
+        """账号面板：注册 / 导出 / 四种导入，不再套第三层。"""
         pending = {"action": ""}
 
         def pick(name):
@@ -1440,22 +1438,18 @@ class Window(object):
                 form.close()
             return callback
 
-        Form.open(self.root, "账号", [],
-                  submit="关闭",
-                  buttons=(("收录", pick("capture")), ("注册", pick("signup")),
-                           ("导入", pick("import")), ("导出", pick("export"))))
-        action = pending["action"]
-        if action == "capture":
-            self.import_current()
-        elif action == "signup":
-            self.do_signup()
-        elif action == "import":
-            self.do_import()
-        elif action == "export":
-            self.do_export()
+        Form.open(self.root, "账号", [], submit="关闭",
+                  rows=((("注册", pick("signup")), ("导出", pick("export"))),
+                        (("导入文本", pick("text")), ("导入文件", pick("file"))),
+                        (("导入客户端", pick("client")), ("导入编辑器", pick("ide")))))
+        {"signup": self.do_signup, "export": self.do_export,
+         "text": self.import_text, "file": self.import_file,
+         "client": self.import_client, "ide": self.import_ide
+         }.get(pending["action"], lambda: None)()
+
 
     def do_slots(self):
-        """实例面板：GUI / CLI 当前登录与切换，以及命名实例的一组动作。"""
+        """实例面板：GUI / CLI 切换与命名实例动作，按行排。"""
         gui = (self.current.get("nickname") or self.current.get("uid", "")[:8]
                or "未登录")
         cli = (self.cli_cur.get("nickname") or self.cli_cur.get("uid", "")[:8]
@@ -1463,7 +1457,7 @@ class Window(object):
         pending = {"action": "", "slot": self.slot_sel}
 
         def pick(name):
-            """面板里的一个动作：记下实例与动作并关闭面板。"""
+            """面板里的一个动作：记下实例与动作并关面板。"""
             def callback(form):
                 label = str(form.values().get("slot") or "")
                 pending["slot"] = next(
@@ -1479,10 +1473,10 @@ class Window(object):
                     "choices": self.slot_labels or ["（无实例）"],
                     "value": self.slot_var.get()}],
                   note="GUI：%s　CLI：%s" % (gui, cli), submit="关闭",
-                  buttons=(("切换 GUI", pick("gui")), ("切换 CLI", pick("cli")),
-                           ("新建", pick("new")), ("换号", pick("switch")),
-                           ("启动", pick("launch")), ("停止", pick("stop")),
-                           ("删除", pick("remove"))))
+                  rows=((("切换 GUI", pick("gui")), ("切换 CLI", pick("cli"))),
+                        (("新建", pick("new")), ("换号", pick("switch"))),
+                        (("启动", pick("launch")), ("停止", pick("stop")),
+                         ("删除", pick("remove")))))
         action = pending["action"]
         if action in ("switch", "launch", "stop", "remove"):
             self.slot_sel = pending["slot"]
@@ -1513,46 +1507,34 @@ class Window(object):
             self.thread_log("有 %d 个账号 3 天内到期，自动续期" % len(targets))
             threading.Thread(target=work, daemon=True).start()
 
-    def do_import(self):
-        """导入账号：粘贴文本 / 选文件 / 扫本机客户端 auth 目录。"""
-        if self.busy:
-            return
-        mode = Form.choice(
-            self.root, "导入账号", "从哪里导入",
-            ["粘贴文本（JSON / JSONL / CSV / 每行一个 token）",
-             "选择文件（json / jsonl / info / csv / txt / zip）",
-             "扫描本机客户端 auth 目录（*.info）",
-             "从编辑器登录态导入（VS Code / CodeBuddy IDE / JetBrains）"])
-        if not mode:
-            return
-        text, path = "", ""
-        if mode.startswith("粘贴"):
-            text = Form.text(self.root, "粘贴账号", "内容")
-            if not text:
-                return
-        elif mode.startswith("选择"):
-            path = filedialog.askopenfilename(
-                title="选择账号文件",
-                filetypes=[("账号文件", "*.json *.jsonl *.info *.csv *.txt *.zip"),
-                           ("全部文件", "*.*")])
-            if not path:
-                return
 
+    def _merge_rows(self, loader, label="导入"):
+        """把 loader 读出来的账号合并进库（导入的公共尾巴）。"""
         def work():
-            """后台：解析并合并进账号库，返回新增 / 更新 / 跳过明细。"""
-            if mode.startswith("从编辑器"):
-                rows, notes = Ide.scan(log=self.thread_log)
-            elif mode.startswith("扫描"):
-                rows, notes = Bulk.scan_client(log=self.thread_log)
-            elif path:
-                rows, notes = Bulk.read(path)
-            else:
-                rows, notes = Bulk.parse(text)
+            rows, notes = loader()
             result = Bulk.merge(self.store, rows)
             result["notes"] = notes
             return result
+        self._run(label, work)
 
-        self._run("导入", work)
+    def import_text(self):
+        """粘贴文本导入。"""
+        text = Form.text(self.root, "导入文本", "内容")
+        if text:
+            self._merge_rows(lambda: Bulk.parse(text))
+
+    def import_file(self):
+        """从文件导入。"""
+        path = filedialog.askopenfilename(
+            title="选择账号文件",
+            filetypes=[("账号文件", "*.json *.jsonl *.info *.csv *.txt *.zip"),
+                       ("全部文件", "*.*")])
+        if path:
+            self._merge_rows(lambda: Bulk.read(path))
+
+    def import_client(self):
+        """扫客户端 auth 目录导入。"""
+        self._merge_rows(lambda: Bulk.scan_client(log=self.thread_log))
 
     def import_ide(self):
         """只从编辑器登录态导入：VS Code 扩展 / CodeBuddy IDE / JetBrains 插件。"""
@@ -1628,20 +1610,6 @@ class Window(object):
         self._run("用量", work)
 
 
-    def copy_accounts(self):
-        """把选中（或全部）账号复制成 JSONL 到剪贴板。"""
-        rows = [dict(entry.data)
-                for entry in (list(self.selected_all()) or list(self.entries))]
-        if not rows:
-            self.log("没有可复制的账号", "warn")
-            return
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(Bulk.clipboard(rows))
-        except Exception as exc:
-            self.log("复制失败：%s" % exc, "err")
-            return
-        self.log("已复制 %d 个账号的 JSONL 到剪贴板" % len(rows), "ok")
 
     def _post_signup(self, row):
         """新账号收进来后按需跑一遍国内版日常：签到 → 猫咪旅行 → 成长任务。"""

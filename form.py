@@ -26,9 +26,10 @@ class Form(object):
 
     @classmethod
     def open(cls, parent, title, fields, note="", submit="确定", validate=None,
-             buttons=(), width=46):
-        """打开表单并等它关闭；取消返回 None。"""
-        dialog = _Dialog(parent, title, fields, note, submit, validate, buttons, width)
+             buttons=(), width=46, rows=()):
+        """打开表单并等它关闭；取消返回 None。rows 给出多行按钮。"""
+        dialog = _Dialog(parent, title, fields, note, submit, validate, buttons,
+                         width, rows)
         return dialog.wait()
 
     @classmethod
@@ -58,7 +59,8 @@ class Form(object):
 class _Dialog(object):
     """表单窗口本体：建控件、收值、校验、等关闭。"""
 
-    def __init__(self, parent, title, fields, note, submit, validate, buttons, width):
+    def __init__(self, parent, title, fields, note, submit, validate, buttons, width,
+                 rows=()):
         """一次性把窗口与控件建好。"""
         cfg = _theme()
         self.cfg = cfg
@@ -92,12 +94,19 @@ class _Dialog(object):
                                 wraplength=520)
         self.message.grid(row=row, column=0, columnspan=2, sticky="w", padx=14)
         row += 1
+        row_no = row
         bar = tk.Frame(holder, bg=cfg["panel"])
-        bar.grid(row=row, column=0, columnspan=2, sticky="ew", padx=14, pady=(4, 12))
-        for text, callback in list(buttons):
-            ttk.Button(bar, text=text,
-                       command=lambda fn=callback: self._extra(fn)).pack(side="left",
-                                                                        padx=(0, 6))
+        for group in (([list(buttons)] if buttons else []) + [list(row) for row in rows]):
+            line = tk.Frame(holder, bg=cfg["panel"])
+            line.grid(row=row_no, column=0, columnspan=2, sticky="ew", padx=14,
+                      pady=(2, 0))
+            for text, callback in group:
+                ttk.Button(line, text=text,
+                           command=lambda fn=callback: self._extra(fn)).pack(
+                    side="left", padx=(0, 6))
+            row_no += 1
+        bar.grid(row=row_no, column=0, columnspan=2, sticky="ew", padx=14,
+                 pady=(6, 12))
         ttk.Button(bar, text="取消", command=self.cancel).pack(side="right")
         ttk.Button(bar, text=submit, style="Primary.TButton",
                    command=self.submit).pack(side="right", padx=(0, 8))
