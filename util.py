@@ -228,6 +228,58 @@ def fmt_num(value, digits=1):
     return ("%%.%df" % digits) % number
 
 
+class Prefs(object):
+    """data/settings.json：接码平台与导出目录这类全局设置。"""
+
+    PATH = os.path.join(DATA, "settings.json")
+    DEFAULTS = {"sms": {"base": "https://www.jichisms.com", "token": "", "engine": "a",
+                        "project_id": "139372", "wait": 90},
+                "ui": {"export_dir": ""}}
+
+    @classmethod
+    def load(cls):
+        """读设置；缺的段与键用默认值补齐。"""
+        try:
+            doc = read_json(cls.PATH)
+            if not isinstance(doc, dict):
+                raise ValueError("不是对象")
+        except Exception:
+            doc = {}
+        merged = json.loads(json.dumps(cls.DEFAULTS))
+        for key, value in doc.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key].update(value)
+            else:
+                merged[key] = value
+        return merged
+
+    @classmethod
+    def save(cls, doc):
+        """整份写回。"""
+        write_json(cls.PATH, doc)
+        return doc
+
+    @classmethod
+    def sms(cls):
+        """接码平台那段配置。"""
+        return as_dict(cls.load().get("sms"))
+
+    @classmethod
+    def save_sms(cls, **patch):
+        """只更新接码平台那段。"""
+        doc = cls.load()
+        section = as_dict(doc.get("sms"))
+        section.update({key: value for key, value in patch.items() if value is not None})
+        doc["sms"] = section
+        cls.save(doc)
+        return section
+
+    @classmethod
+    def export_dir(cls):
+        """默认导出目录（可能为空串）。"""
+        return str(as_dict(cls.load().get("ui")).get("export_dir") or "")
+
+
 class Process:
     """客户端 / CLI 进程：枚举、身份核对与停止。"""
 

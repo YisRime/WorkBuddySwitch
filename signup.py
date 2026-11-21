@@ -34,7 +34,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from timer import Settings
+from util import Prefs
 from util import REALMS, CoreError, as_dict, jwt_claims, jwt_exp, jwt_uid, say
 
 HOST = "https://www.workbuddy.cn"
@@ -489,7 +489,7 @@ class SmsBox(object):
     def __init__(self, settings=None):
         """从 settings 的 sms 段取配置（没配也给一份空默认值）。"""
         section = dict(self.DEFAULT)
-        section.update(as_dict((settings or Settings.load()).get("sms")))
+        section.update(as_dict(settings if settings is not None else Prefs.sms()))
         self.base = str(section.get("base") or self.DEFAULT["base"]).rstrip("/")
         self.token = str(section.get("token") or "").strip()
         self.engine = str(section.get("engine") or "a").lower()

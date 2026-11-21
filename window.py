@@ -30,8 +30,8 @@ from stats import Stats
 from store import Store
 from timer import LABELS as TIMER_LABELS, Settings, Timer
 from usage import Usage
-from util import (APP_NAME, BACKUP, CLI_CMD, FONT, MONO, Process, as_dict, due_stamp,
-                  fmt_num, monthly, norm_ts, realm_label)
+from util import (APP_NAME, BACKUP, CLI_CMD, FONT, MONO, Prefs, Process, as_dict,
+                  due_stamp, fmt_num, monthly, norm_ts, realm_label)
 
 PAD = 14
 GAP = 5
@@ -250,14 +250,13 @@ class Window(object):
         self.cli_lbl = None
         self.btn_switch = None
         self.btn_switch_cli = None
-        self.page = "cn"
+        self.slot_boxes = {}
+        self.slot_labels = []
+        self.page = "all"
         self.signup_flow = None
-        self.timer = None
         self._build()
         self.reload()
-        self._start_timer()
         self.root.after(120, self._pump)
-        self.root.after(1500, self._auto_probe)
 
     def _build(self):
         """装好菜单、主体与日志区。"""
@@ -297,7 +296,10 @@ class Window(object):
                           ("刷新", "reload"), ("续期", "refresh_credential"),
                           ("获取", "query_activity"), ("签到", "do_checkin"),
                           ("活跃", "do_report"), ("任务", "do_tasks"),
-                          ("旅行", "do_travel"), ("管家", "do_streak"))),
+                          ("旅行", "do_travel"), ("管家", "do_streak"),
+                          ("新建", "slot_new"), ("换号", "slot_switch"),
+                          ("启动", "slot_launch"), ("停止", "slot_stop"),
+                          ("删除", "slot_remove"))),
             Page("intl",
                  columns=("name", "credit", "packages", "expires", "slots"),
                  titles={"name": "账号", "credit": "积分", "packages": "包数",
@@ -320,9 +322,7 @@ class Window(object):
                           ("导出", "do_export"), ("收录", "import_current"),
                           ("刷新", "reload"), ("续期", "refresh_credential"),
                           ("获取", "query_activity"), ("签到", "do_checkin"),
-                          ("体检", "do_probe"), ("统计", "do_stats"),
-                          ("定时", "do_timer"), ("清理", "do_clean"),
-                          ("复制", "copy_accounts"), ("全选", "select_all"))),
+                          ("复制", "copy_accounts"))),
         )
         for spec in defs:
             self.pages[spec.realm] = spec
@@ -444,18 +444,20 @@ class Window(object):
             self.tip(btn, lambda a=action, p=page: self._tip(a, p))
             page.widgets["buttons"][action] = btn
         row, col = top + len(page.actions) // COLS, len(page.actions) % COLS
-        if page.realm != "intl":
+        if page.realm == "all":
             return row + (1 if col else 0)
         if col == 0:
             row, col = row + 1, 0
-        self.slot_var = tk.StringVar()
-        self.slot_box = ttk.Combobox(area, textvariable=self.slot_var,
-                                     state="readonly", font=(FONT, 9))
-        self.slot_box.grid(row=row, column=col, columnspan=COLS - col,
-                           sticky="ew", padx=BTN_PAD, pady=(GAP, 0))
-        self.slot_box.bind("<<ComboboxSelected>>", self._on_slot_selected)
-        self.tip(self.slot_box, "命名 CLI 实例（可多开，各自账号与文件夹）")
-        page.widgets["slot_box"] = self.slot_box
+        if not hasattr(self, "slot_var"):
+            self.slot_var = tk.StringVar()
+        box = ttk.Combobox(area, textvariable=self.slot_var, state="readonly",
+                           font=(FONT, 9))
+        box.grid(row=row, column=col, columnspan=COLS - col, sticky="ew",
+                 padx=BTN_PAD, pady=(GAP, 0))
+        box.bind("<<ComboboxSelected>>", self._on_slot_selected)
+        self.tip(box, "命名 CLI 实例")
+        page.widgets["slot_box"] = box
+        self.slot_boxes[page.realm] = box
         return row + 1
 
     def _page_switch(self, parent, page):
@@ -567,15 +569,9 @@ class Window(object):
         self.menu.add_command(label="从编辑器导入（VS Code / IDE / JetBrains）",
                               command=self.import_ide)
         self.menu.add_command(label="导出账号…", command=self.do_export)
-        self.menu.add_command(label="账号体检", command=self.do_probe)
-        self.menu.add_command(label="积分报表", command=self.do_stats)
         self.menu.add_command(label="请求用量（本地会话）", command=self.do_usage)
-        self.menu.add_command(label="定时任务…", command=self.do_timer)
-        self.menu.add_command(label="清理账号文件", command=self.do_clean)
-        self.menu.add_command(label="设置…", command=self.do_settings)
         self.menu.add_command(label="复制账号 JSONL", command=self.copy_accounts)
         self.menu.add_separator()
-        self.menu.add_command(label="全选账号", command=self.select_all)
         self.menu.add_command(label="收录当前登录", command=self.import_current)
         self.menu.add_command(label="恢复备份", command=self.restore_backup)
         self.menu.add_command(label="刷新账号列表", command=lambda: self.reload())
@@ -619,15 +615,11 @@ class Window(object):
         if action in ("slot_new", "slot_switch", "slot_launch", "slot_stop", "slot_remove"):
             return self._tip_slot(action.split("_", 1)[1])
         hints = {
-            "do_signup": "用手机号 + 短信验证码注册 / 登录，成功后直接收进账号库",
-            "do_import": "从剪贴板、文件或本机客户端 auth 目录导入账号",
-            "do_export": "把选中（或全部）账号导出成 json / jsonl / csv / txt / zip",
-            "do_probe": "体检：本地字段 + 上游连通，标出过期与失效账号",
-            "do_stats": "按历史快照生成积分趋势报表（写到 data/Reports）",
-            "do_timer": "设置每天自动签到 / 活跃 / 任务 / 旅行 / 管家的时点",
-            "do_clean": "把坏文件与同 uid 重复文件挪进 data/.trash",
-            "copy_accounts": "把选中（或全部）账号复制成 JSONL 到剪贴板",
-            "do_trial": "国际版试用加油包（幂等，已领过按成功算）",
+            "do_signup": "手机号注册 / 登录",
+            "do_import": "从文本、文件或客户端导入账号",
+            "do_export": "导出选中（或全部）账号",
+            "copy_accounts": "复制选中（或全部）账号",
+            "do_trial": "领取国际版试用加油包",
         }
         if action in hints:
             return hints[action]
@@ -1152,27 +1144,27 @@ class Window(object):
             self.log("读实例列表失败：%s" % exc, "warn")
             metas = []
         self.slot_metas = metas
-        box = self.pages["intl"].widgets.get("slot_box")
-        if box is None:
-            return
         labels = []
         for meta in metas:
             nick = meta.get("nickname") or (meta.get("uid") or "")[:8] or "?"
             label = meta["name"] if nick == meta["name"] else "%s · %s" % (meta["name"], nick)
             labels.append("%s · %s" % (label, realm_label(meta.get("realm") or "intl")))
-        box["values"] = labels
+        self.slot_labels = labels
         index = next((i for i, m in enumerate(metas) if m["name"] == self.slot_sel), -1)
-        if index >= 0:
-            box.current(index)
-        else:
+        for box in self.slot_boxes.values():
+            box["values"] = labels
+            if index >= 0:
+                box.current(index)
+        if index < 0:
             self.slot_sel = ""
             self.slot_var.set("选择实例" if metas else "暂无实例")
 
     def _on_slot_selected(self, _event=None):
         """实例下拉换选后同步状态并刷新按钮。"""
-        index = self.slot_box.current()
-        self.slot_sel = (self.slot_metas[index]["name"]
-                         if 0 <= index < len(self.slot_metas) else "")
+        label = self.slot_var.get()
+        self.slot_sel = next((meta["name"] for index, meta in enumerate(self.slot_metas)
+                              if index < len(self.slot_labels)
+                              and self.slot_labels[index] == label), "")
         self._sync_buttons()
 
     def slot_meta(self):
@@ -1446,15 +1438,42 @@ class Window(object):
 
             threading.Thread(target=work, daemon=True).start()
 
+        def buy(form):
+            """接码：租号 → 发码 → 等码 → 校验，全过程走接码平台。"""
+            values_now = form.values()
+            token = str(values_now.get("sms_token") or "").strip()
+            if not token:
+                form.note("先填接码 token")
+                return
+            Prefs.save_sms(token=token,
+                           base="https://www.jichisms.com",
+                           project_id=str(values_now.get("sms_project") or "139372"))
+            form.note("正在租号…")
+
+            def work():
+                """后台：整条接码注册流程。"""
+                try:
+                    row = Signup.auto_register(log=self.thread_log)
+                except Exception as exc:
+                    self.thread_log("接码注册失败：%s" % exc)
+                    self.root.after(0, lambda: form.note("失败：%s" % exc))
+                else:
+                    self.signup_row = row
+                    self.root.after(0, form.close)
+
+            threading.Thread(target=work, daemon=True).start()
+
         values = Form.open(
-            self.root, "注册 / 手机号登录",
-            [{"key": "mobile", "label": "手机号", "hint": "国内 11 位；支持 86 / 852 / 853"},
-             {"key": "code", "label": "验证码", "hint": "6 位数字，点「发送验证码」后填"},
-             {"key": "daily", "label": "注册后跑日常", "choices": ["否", "是"], "value": "否",
-              "hint": "签到 / 猫咪旅行 / 成长任务（仅国内版，耗时较长）"}],
-            note="验证码由腾讯发给账号主人本人，本工具不碰短信内容，只把登录协议跑完"
-                 "并把凭证收进账号库。",
-            submit="登录并收录", buttons=(("发送验证码", send), ("浏览器登录", relay)))
+            self.root, "注册 / 登录",
+            [{"key": "mobile", "label": "手机号", "hint": "国内 11 位"},
+             {"key": "code", "label": "验证码"},
+             {"key": "sms_token", "label": "接码 token", "secret": True,
+              "value": Prefs.sms().get("token") or ""},
+             {"key": "sms_project", "label": "接码项目",
+              "value": Prefs.sms().get("project_id") or ""},
+             {"key": "daily", "label": "注册后跑日常", "choices": ["否", "是"], "value": "否"}],
+            note="验证码由腾讯发给账号本人。", submit="登录并收录",
+            buttons=(("发送验证码", send), ("浏览器登录", relay), ("接码注册", buy)))
         if self.signup_row is not None:
             row = self.signup_row
             self.signup_row = None
@@ -1570,7 +1589,7 @@ class Window(object):
             self.log("单账号 .info 只能选中一个账号再导出", "warn")
             return
         default = "workbuddy-accounts-%s.%s" % (time.strftime("%Y%m%d-%H%M"), fmt)
-        folder = str(as_dict(Settings.load().get("ui")).get("export_dir") or "")
+        folder = Prefs.export_dir()
         path = filedialog.asksaveasfilename(
             title="导出到", initialfile=default, defaultextension="." + fmt,
             initialdir=folder or None,
