@@ -517,7 +517,7 @@ class Window(object):
         self.menu.add_command(label="连登管家与抽奖", command=self.do_streak)
         self.menu.add_command(label="获取积分", command=self.query_activity)
         self.menu.add_separator()
-        self.menu.add_command(label="注册 / 手机号登录…", command=self.do_signup)
+        self.menu.add_command(label="账号面板…", command=self.do_account)
         self.menu.add_command(label="导入文本…", command=self.import_text)
         self.menu.add_command(label="从编辑器导入（VS Code / IDE / JetBrains）",
                               command=self.import_ide)
@@ -1302,162 +1302,120 @@ class Window(object):
 
     # ---------- 注册 / 导入 / 导出 / 体检 / 统计 / 定时 / 清理 ----------
 
-    def do_signup(self):
-        """注册或登录一个账号：手机号 + 验证码，成功后直接进账号库。"""
-        if self.busy:
-            return
-        self.signup_flow = None
-        self.signup_row = None
-        state = {"sending": False, "daily": False}
+
+    def do_account(self):
+        """账号面板：注册字段 + 导入 / 导出，全部在同一层。"""
+        state = {"flow": None, "sending": False}
 
         def send(form):
-            """发验证码：开链与发码都放后台，结果写回表单提示。"""
+            """发验证码。"""
             if state["sending"]:
-                self.log("验证码正在发送，稍等", "dim")
                 return
-            digits, _country = Signup.mobile(form.values().get("mobile") or "")
+            digits, _c = Signup.mobile(form.values().get("mobile") or "")
             state["sending"] = True
-            form.note("正在连接上游、铺授权链…")
+            form.note("发送中…")
 
             def work():
-                """后台：开链并请求验证码。"""
+                """后台开链并请求验证码。"""
                 try:
                     flow = Signup.start()
-                    info = Signup.send_code(flow, digits)
+                    Signup.send_code(flow, digits)
+                    state["flow"] = flow
+                    self.root.after(0, lambda: form.note("已发送"))
                 except Exception as exc:
-                    self.thread_log("发送验证码失败：%s" % exc)
-                    self.root.after(0, lambda: form.note("发送失败：%s" % exc))
-                else:
-                    self.signup_flow = flow
-                    self.thread_log("验证码已发到 %s（%d 秒内有效）"
-                                    % (info["phone"], info["expires_in"]))
-                    self.root.after(0, lambda: form.note(
-                        "验证码已发出，填进「验证码」再点「登录并收录」"))
+                    self.root.after(0, lambda: form.note(str(exc)))
                 finally:
                     state["sending"] = False
 
             threading.Thread(target=work, daemon=True).start()
 
-        def relay(form):
-            """官方页面接力：浏览器里登录，后台轮询换凭证。"""
-            state["daily"] = str(form.values().get("daily") or "否") == "是"
-            form.note("正在打开浏览器登录页…")
-
-            def work():
-                """后台：拿 state → 开浏览器 → 轮询凭证。"""
-                try:
-                    import webbrowser
-                    start = Signup.official_start()
-                    webbrowser.open(start["url"])
-                    self.thread_log("已在浏览器打开官方登录页；登录完成后自动收回凭证")
-                    row = Signup.official_poll(start["state"], timeout=180,
-                                               log=self.thread_log)
-                except Exception as exc:
-                    self.thread_log("浏览器登录失败：%s" % exc)
-                    self.root.after(0, lambda: form.note("失败：%s" % exc))
-                else:
-                    self.signup_row = row
-                    self.root.after(0, form.close)
-
-            threading.Thread(target=work, daemon=True).start()
-
         def buy(form):
-            """接码：租号 → 发码 → 等码 → 校验，全过程走接码平台。"""
+            """接码注册：租号 → 发码 → 取码 → 校验。"""
             token = str(form.values().get("sms_token") or "").strip()
             if not token:
                 form.note("先填接码 token")
                 return
             Prefs.save_sms(token=token, base="https://www.jichisms.com",
                            project_id="139372")
-            form.note("正在租号…")
+            form.note("租号中…")
+            form.close()
 
             def work():
-                """后台：整条接码注册流程。"""
+                """后台整条接码流程。"""
                 try:
                     row = Signup.auto_register(log=self.thread_log)
                 except Exception as exc:
                     self.thread_log("接码注册失败：%s" % exc)
-                    self.root.after(0, lambda: form.note("失败：%s" % exc))
                 else:
-                    self.signup_row = row
-                    self.root.after(0, form.close)
+                    self.root.after(0, lambda: self._run("注册", lambda: self._save_row(row)))
 
             threading.Thread(target=work, daemon=True).start()
 
-        values = Form.open(
-            self.root, "注册 / 登录",
-            [{"key": "mobile", "label": "手机号", "buttons": (("浏览器登录", relay),)},
-             {"key": "code", "label": "验证码",
-              "buttons": (("发送验证码", send), ("接码注册", buy))},
-             {"key": "sms_token", "label": "接码 token", "secret": True,
-              "value": Prefs.sms().get("token") or ""},
-             {"key": "daily", "label": "注册后跑日常", "choices": ["否", "是"], "value": "否"}],
-            submit="登录")
-        if self.signup_row is not None:
-            row = self.signup_row
-            self.signup_row = None
+        def relay(form):
+            """浏览器登录。"""
+            form.close()
 
-            def save():
-                """浏览器登录已经拿到凭证：直接进账号库，按需跑一遍日常。"""
-                path = self.store.upsert(row)
-                if state["daily"]:
-                    self._post_signup(row)
-                return {"nickname": row["nickname"], "path": os.path.basename(path)}
+            def work():
+                """后台轮询收回凭证。"""
+                try:
+                    start = Signup.official_start()
+                    import webbrowser
+                    webbrowser.open(start["url"])
+                    row = Signup.official_poll(start["state"], log=self.thread_log)
+                except Exception as exc:
+                    self.thread_log("浏览器登录失败：%s" % exc)
+                else:
+                    self.root.after(0, lambda: self._run("注册", lambda: self._save_row(row)))
 
-            self._run("注册", save)
-            return
-        if not values:
-            return
-        code = str(values.get("code") or "").strip()
-        if not re.fullmatch(r"\d{6}", code):
-            self.log("验证码要 6 位数字", "warn")
-            return
-        flow = self.signup_flow
-        if flow is None:
-            self.log("还没有发过验证码：先在表单里点「发送验证码」", "warn")
-            return
+            threading.Thread(target=work, daemon=True).start()
 
-        def work():
-            """后台：校验验证码、换凭证、写进账号库，按需跑一遍日常。"""
-            row = Signup.verify(flow, code, log=self.thread_log)
-            path = self.store.upsert(row)
-            if state["daily"]:
-                self._post_signup(row)
-            return {"nickname": row["nickname"], "path": os.path.basename(path)}
-
-        self._run("注册", work)
-
-    def do_account(self):
-        """账号面板：注册 / 导出 / 四种导入，不再套第三层。"""
-        pending = {"action": ""}
+        def login(form):
+            """用填好的验证码换凭证。"""
+            code = str(form.values().get("code") or "").strip()
+            flow = state["flow"]
+            if flow is None:
+                form.note("先发送验证码")
+                return
+            if not re.fullmatch(r"\d{6}", code):
+                form.note("验证码 6 位")
+                return
+            form.close()
+            self._run("注册", lambda: self._save_row(
+                Signup.verify(flow, code, log=self.thread_log)))
 
         def pick(name):
-            """面板里的一个动作：记下名字并关面板。"""
+            """跳到导入 / 导出。"""
             def callback(form):
-                pending["action"] = name
                 form.close()
+                getattr(self, name)()
             return callback
 
-        Form.open(self.root, "账号", [], submit="关闭",
-                  rows=((("注册", pick("signup")), ("导出", pick("export"))),
-                        (("导入文本", pick("text")), ("导入文件", pick("file"))),
-                        (("导入客户端", pick("client")), ("导入编辑器", pick("ide")))))
-        {"signup": self.do_signup, "export": self.do_export,
-         "text": self.import_text, "file": self.import_file,
-         "client": self.import_client, "ide": self.import_ide
-         }.get(pending["action"], lambda: None)()
+        Form.open(self.root, "账号",
+                  [{"key": "mobile", "label": "手机号",
+                    "buttons": (("浏览器登录", relay),)},
+                   {"key": "code", "label": "验证码",
+                    "buttons": (("发送验证码", send), ("接码注册", buy))},
+                   {"key": "sms_token", "label": "接码 token", "secret": True,
+                    "value": Prefs.sms().get("token") or ""}],
+                  submit=None,
+                  rows=((("登录", login), ("导出", pick("do_export"))),
+                        (("导入文本", pick("import_text")),
+                         ("导入文件", pick("import_file"))),
+                        (("导入客户端", pick("import_client")),
+                         ("导入编辑器", pick("import_ide")))))
+
+    def _save_row(self, row):
+        """把一条账号写进库。"""
+        path = self.store.upsert(row)
+        return {"nickname": row["nickname"], "path": os.path.basename(path)}
 
 
     def do_slots(self):
-        """实例面板：GUI / CLI 切换与命名实例动作，按行排。"""
-        gui = (self.current.get("nickname") or self.current.get("uid", "")[:8]
-               or "未登录")
-        cli = (self.cli_cur.get("nickname") or self.cli_cur.get("uid", "")[:8]
-               or "未登录")
+        """实例面板：登录槽位与实例动作，三行。"""
         pending = {"action": "", "slot": self.slot_sel}
 
         def pick(name):
-            """面板里的一个动作：记下实例与动作并关面板。"""
+            """记下实例与动作并关面板。"""
             def callback(form):
                 label = str(form.values().get("slot") or "")
                 pending["slot"] = next(
@@ -1471,8 +1429,7 @@ class Window(object):
         Form.open(self.root, "实例",
                   [{"key": "slot", "label": "实例",
                     "choices": self.slot_labels or ["（无实例）"],
-                    "value": self.slot_var.get()}],
-                  note="GUI：%s　CLI：%s" % (gui, cli), submit="关闭",
+                    "value": self.slot_var.get()}], submit=None,
                   rows=((("切换 GUI", pick("gui")), ("切换 CLI", pick("cli"))),
                         (("新建", pick("new")), ("换号", pick("switch"))),
                         (("启动", pick("launch")), ("停止", pick("stop")),

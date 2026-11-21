@@ -78,15 +78,16 @@ class _Dialog(object):
         holder = tk.Frame(self.top, bg=cfg["panel"], highlightthickness=1,
                           highlightbackground=cfg["line"])
         holder.pack(fill="both", expand=True, padx=12, pady=12)
-        tk.Label(holder, text=title, bg=cfg["panel"], fg=cfg["text"],
-                 font=("Microsoft YaHei UI", 11, "bold"), anchor="w").grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 6))
-        if note:
+        if not rows:
+            tk.Label(holder, text=title, bg=cfg["panel"], fg=cfg["text"],
+                     font=("Microsoft YaHei UI", 11, "bold"), anchor="w").grid(
+                row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 6))
+        if note and not rows:
             tk.Label(holder, text=note, bg=cfg["panel"], fg=cfg["dim"],
                      font=("Microsoft YaHei UI", 8), anchor="w", justify="left",
                      wraplength=520).grid(row=1, column=0, columnspan=2, sticky="w",
                                           padx=14, pady=(0, 6))
-        row = 2 if note else 1
+        row = 2 if (note and not rows) else 1
         for item in self.fields:
             row = self._field(holder, row, item, width)
         self.message = tk.Label(holder, text="", bg=cfg["panel"], fg=cfg["err"],
@@ -105,11 +106,12 @@ class _Dialog(object):
                            command=lambda fn=callback: self._extra(fn)).pack(
                     side="left", padx=(0, 6))
             row_no += 1
-        bar.grid(row=row_no, column=0, columnspan=2, sticky="ew", padx=14,
-                 pady=(6, 12))
-        ttk.Button(bar, text="取消", command=self.cancel).pack(side="right")
-        ttk.Button(bar, text=submit, style="Primary.TButton",
-                   command=self.submit).pack(side="right", padx=(0, 8))
+        if submit:
+            bar.grid(row=row_no, column=0, columnspan=2, sticky="ew", padx=14,
+                     pady=(6, 12))
+            ttk.Button(bar, text="取消", command=self.cancel).pack(side="right")
+            ttk.Button(bar, text=submit, style="Primary.TButton",
+                       command=self.submit).pack(side="right", padx=(0, 8))
         holder.columnconfigure(1, weight=1)
         self.top.bind("<Return>", lambda _e: self.submit())
         self.top.bind("<Escape>", lambda _e: self.cancel())
