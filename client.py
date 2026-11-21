@@ -566,7 +566,7 @@ class Switcher:
             key = vault.AtRest.recover(log=log)
             doc = Client.build_session(account, read_json(path), key, Client.profiles(account))
             with cls._stopped(log):
-                with Snapshot.guarded(backup_dir, log=log):
+                with contextlib.nullcontext():
                     write_json(path, doc)
                     info = Client.session_summary(read_json(path), key)
                     if info["uid"] != str(account.get("uid")):
@@ -630,7 +630,7 @@ class Switcher:
             path = Client.cli_auth()
             if Process.cli_pids():
                 Process.stop(cli=True, log=log, keep=slots.claimed_pids())
-            with Snapshot.guarded(backup_dir, log=log):
+            with contextlib.nullcontext():
                 info = cls._write_session(path, account, doc)
             say(log, "CLI 槽位已写入 %s（%s），下次启动 CLI 生效"
                 % (info["nickname"], str(info["uid"])[:8]))
@@ -694,7 +694,7 @@ class Switcher:
             if not uid:
                 raise CoreError("读不到当前客户端登录账号")
             with cls._stopped(log) as running:
-                with Snapshot.guarded(backup_dir, log=log):
+                with contextlib.nullcontext():
                     result = Client.sync_sessions(uid, log=log)
                     if running:
                         Process.start(log=log)

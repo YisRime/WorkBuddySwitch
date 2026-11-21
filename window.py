@@ -254,7 +254,9 @@ class Window(object):
         self.signup_flow = None
         self._build()
         self.reload()
+        self._ready = True
         self.root.after(120, self._pump)
+        self.root.after(900, self._auto_renew)
 
     def _build(self):
         """装好菜单、主体与日志区。"""
@@ -292,16 +294,11 @@ class Window(object):
                          "credit": "积分", "expires": "到期"},
                  widths={"name": 132, "realm": 54, "state": 56, "checkin": 52,
                          "streak": 46, "energy": 46, "credit": 58, "expires": 176},
-                 actions=(("收录", "import_current"), ("恢复", "restore_backup"),
-                          ("刷新", "reload"), ("续期", "refresh_credential"),
+                 actions=(("账号", "do_account"), ("实例", "do_slots"),
                           ("获取", "query_activity"), ("签到", "do_checkin"),
                           ("活跃", "do_report"), ("任务", "do_tasks"),
                           ("旅行", "do_travel"), ("管家", "do_streak"),
-                          ("试用", "do_trial"), ("注册", "do_signup"),
-                          ("导入", "do_import"), ("导出", "do_export"),
-                          ("复制", "copy_accounts"), ("新建", "slot_new"),
-                          ("换号", "slot_switch"), ("启动", "slot_launch"),
-                          ("停止", "slot_stop"), ("删除", "slot_remove"))),
+                          ("试用", "do_trial"), ("复制", "copy_accounts"))),
         )
         for spec in defs:
             self.pages[spec.realm] = spec
@@ -502,6 +499,7 @@ class Window(object):
             self.realm_filter = "" if self.realm_filter == key else key
         elif key is None:
             self.realm_filter = ""
+        self.reload()
         seg = self.page_spec.widgets.get("seg") or {}
         for name, btn in seg.items():
             btn.configure(style="SegOn.TButton" if name == self.realm_filter
@@ -523,7 +521,6 @@ class Window(object):
         self.menu.add_command(label="切换 GUI", command=self.switch_desktop)
         self.menu.add_command(label="切换 CLI", command=self.switch_cli)
         self.menu.add_command(label="同步会话", command=self.sync_current)
-        self.menu.add_command(label="续期凭证", command=self.refresh_credential)
         self.menu.add_separator()
         self.menu.add_command(label="新建实例（用此账号）", command=self.slot_new)
         self.menu.add_command(label="换号到选中实例", command=self.slot_switch)
@@ -547,8 +544,6 @@ class Window(object):
         self.menu.add_command(label="复制账号 JSONL", command=self.copy_accounts)
         self.menu.add_separator()
         self.menu.add_command(label="收录当前登录", command=self.import_current)
-        self.menu.add_command(label="恢复备份", command=self.restore_backup)
-        self.menu.add_command(label="刷新账号列表", command=lambda: self.reload())
         self.menu.add_command(label="复制 UID", command=self.copy_uid)
 
     def _tip(self, action, page=None):
@@ -589,6 +584,8 @@ class Window(object):
         if action in ("slot_new", "slot_switch", "slot_launch", "slot_stop", "slot_remove"):
             return self._tip_slot(action.split("_", 1)[1])
         hints = {
+            "do_account": "收录 / 注册 / 导入 / 导出",
+            "do_slots": "实例：新建 / 换号 / 启动 / 停止 / 删除",
             "do_signup": "手机号注册 / 登录",
             "do_import": "从文本、文件或客户端导入账号",
             "do_export": "导出选中（或全部）账号",
@@ -646,6 +643,8 @@ class Window(object):
         self.entries, self.errors = self.store.load()
         self.by_uid = {e.uid: e for e in self.entries}
         self.refresh_current()
+        if getattr(self, "_ready", False):
+            self.root.after(600, self._auto_renew)
         for err in self.errors:
             self.log("注意：" + err, "warn")
 
@@ -977,7 +976,6 @@ class Window(object):
                 widget.configure(state="normal" if ok else "disabled")
         for label, ok in (("切换 GUI", gui_ok), ("切换 CLI", cli_ok),
                           ("收录当前登录", free),
-                          ("恢复备份", free and self._has_backup()),
                           ("新建实例（用此账号）", free and bool(entry) and cli_bin),
                           ("启动实例", free and cli_bin)):
             self.menu.entryconfigure(label, state="normal" if ok else "disabled")
@@ -1066,37 +1064,6 @@ class Window(object):
             return
         self._run("同步会话", lambda: Switcher.sync(BACKUP, log=self.thread_log))
 
-    def refresh_credential(self):
-        """批量续期选中 / 本页账号的凭证并写回账号文件。"""
-        targets = self._targets()
-        if not targets or self.busy:
-            return
-        self.log("用 refreshToken 续期 %d 个账号，成功后写回 JSON" % len(targets), "dim")
-
-        def work():
-            """逐个续期，返回成功与失败名单。"""
-            done, failed = [], []
-            for entry in targets:
-                try:
-                    Client.refresh(entry.data, log=self.thread_log)
-                    entry.expires_at = entry.data.get("expiresAt") or 0
-                    self.store.persist(entry)
-                    done.append(entry.nickname)
-                except Exception as exc:
-                    failed.append("%s：%s" % (entry.nickname, exc))
-            return {"done": done, "failed": failed}
-
-        self._run("续期凭证", work)
-
-    def restore_backup(self):
-        """用 data/Backup 的快照恢复登录态与本地库。"""
-        if self.busy:
-            return
-        if not self._has_backup():
-            self.log("还没有备份", "warn")
-            return
-        self.log("将用 data/Backup 的快照恢复登录态与本地库，并重启客户端", "dim")
-        self._run("恢复", lambda: Switcher.restore(BACKUP, log=self.thread_log))
 
     def import_current(self):
         """把当前 GUI 登录态收录进账号库。"""
@@ -1478,6 +1445,83 @@ class Window(object):
             return {"nickname": row["nickname"], "path": os.path.basename(path)}
 
         self._run("注册", work)
+
+    def do_account(self):
+        """账号二级面板：收录 / 注册 / 导入 / 导出。"""
+        pending = {"action": ""}
+
+        def pick(name):
+            """面板里的一个动作：记下名字并关面板。"""
+            def callback(form):
+                pending["action"] = name
+                form.close()
+            return callback
+
+        Form.open(self.root, "账号", [],
+                  submit="关闭",
+                  buttons=(("收录", pick("capture")), ("注册", pick("signup")),
+                           ("导入", pick("import")), ("导出", pick("export"))))
+        action = pending["action"]
+        if action == "capture":
+            self.import_current()
+        elif action == "signup":
+            self.do_signup()
+        elif action == "import":
+            self.do_import()
+        elif action == "export":
+            self.do_export()
+
+    def do_slots(self):
+        """实例二级面板：选实例，再新建 / 换号 / 启动 / 停止 / 删除。"""
+        pending = {"action": "", "slot": self.slot_sel}
+
+        def pick(name):
+            """面板里的一个实例动作：记下选择与动作并关面板。"""
+            def callback(form):
+                label = str(form.values().get("slot") or "")
+                pending["slot"] = next(
+                    (meta["name"] for index, meta in enumerate(self.slot_metas)
+                     if index < len(self.slot_labels)
+                     and self.slot_labels[index] == label), "")
+                pending["action"] = name
+                form.close()
+            return callback
+
+        Form.open(self.root, "实例",
+                  [{"key": "slot", "label": "实例",
+                    "choices": self.slot_labels or ["（无实例）"],
+                    "value": self.slot_var.get() if hasattr(self, "slot_var") else ""}],
+                  submit="关闭",
+                  buttons=(("新建", pick("new")), ("换号", pick("switch")),
+                           ("启动", pick("launch")), ("停止", pick("stop")),
+                           ("删除", pick("remove"))))
+        action = pending["action"]
+        if action:
+            self.slot_sel = pending["slot"]
+        {"new": self.slot_new, "switch": self.slot_switch, "launch": self.slot_launch,
+         "stop": self.slot_stop, "remove": self.slot_remove}.get(
+            action, lambda: None)()
+
+    def _auto_renew(self):
+        """剩余 3 天以内的凭证自动续期，结果写日志。"""
+        now = time.time()
+        targets = [entry for entry in self.entries
+                   if entry.usable and entry.refreshToken
+                   and 0 < norm_ts(entry.expires_at) - now <= 3 * 86400]
+
+        def work():
+            """后台逐个续期，成功后写回账号文件。"""
+            for entry in targets:
+                try:
+                    Client.refresh(entry.data, log=self.thread_log)
+                    self.store.persist(entry)
+                    self.thread_log("已自动续期 %s" % entry.nickname)
+                except Exception as exc:
+                    self.thread_log("自动续期 %s 失败：%s" % (entry.nickname, exc))
+
+        if targets and not self.busy:
+            self.thread_log("有 %d 个账号 3 天内到期，自动续期" % len(targets))
+            threading.Thread(target=work, daemon=True).start()
 
     def do_import(self):
         """导入账号：粘贴文本 / 选文件 / 扫本机客户端 auth 目录。"""
