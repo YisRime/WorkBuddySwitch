@@ -247,6 +247,7 @@ class Window(object):
         self.cli_lbl = None
         self.btn_switch = None
         self.btn_switch_cli = None
+        self.slot_var = tk.StringVar()
         self.slot_boxes = {}
         self.slot_labels = []
         self.page = "all"
@@ -372,13 +373,6 @@ class Window(object):
             area.columnconfigure(col, weight=1, uniform="act")
 
         row = self._button_grid(area, 0, page)
-        if page.realm in ("intl", "all"):
-            self.cur_lbl, self.btn_switch = self._current_line(
-                area, row, "GUI", (FONT, 10, "bold"), Theme.TEXT,
-                self.switch_desktop, lambda: self._tip("switch_desktop"))
-            self.cli_lbl, self.btn_switch_cli = self._current_line(
-                area, row + 1, "CLI", (FONT, 9), Theme.MUTED,
-                self.switch_cli, lambda: self._tip("switch_cli"))
 
         packs = tk.Frame(side, bg=Theme.PANEL, highlightthickness=1,
                          highlightbackground=Theme.LINE)
@@ -420,19 +414,7 @@ class Window(object):
             self.tip(btn, lambda a=action, p=page: self._tip(a, p))
             page.widgets["buttons"][action] = btn
         row, col = top + len(page.actions) // COLS, len(page.actions) % COLS
-        if col == 0:
-            row, col = row + 1, 0
-        if not hasattr(self, "slot_var"):
-            self.slot_var = tk.StringVar()
-        box = ttk.Combobox(area, textvariable=self.slot_var, state="readonly",
-                           font=(FONT, 9))
-        box.grid(row=row, column=col, columnspan=COLS - col, sticky="ew",
-                 padx=BTN_PAD, pady=(GAP, 0))
-        box.bind("<<ComboboxSelected>>", self._on_slot_selected)
-        self.tip(box, "命名 CLI 实例")
-        page.widgets["slot_box"] = box
-        self.slot_boxes[page.realm] = box
-        return row + 1
+        return row + (1 if col else 0)
 
     def _page_switch(self, parent, page):
         """区域筛选：国内版 / 国际版两个 chip，再点一次取消筛选。"""
@@ -585,7 +567,7 @@ class Window(object):
             return self._tip_slot(action.split("_", 1)[1])
         hints = {
             "do_account": "收录 / 注册 / 导入 / 导出",
-            "do_slots": "实例：新建 / 换号 / 启动 / 停止 / 删除",
+            "do_slots": "登录槽位与实例",
             "do_signup": "手机号注册 / 登录",
             "do_import": "从文本、文件或客户端导入账号",
             "do_export": "导出选中（或全部）账号",
@@ -958,9 +940,10 @@ class Window(object):
                 state = free and bool(meta) and bool(meta.get("pids"))
             elif action == "slot_remove":
                 state = free and bool(meta)
-            elif action in ("do_signup", "do_import", "do_export", "do_probe",
-                            "do_stats", "do_timer", "do_clean"):
+            elif action in ("do_account", "do_slots"):
                 state = free
+            elif action == "do_trial":
+                state = free and bool(self._intl_targets())
             elif action == "do_trial":
                 state = free and bool(self._intl_targets())
             elif action == "copy_accounts":
@@ -1472,11 +1455,15 @@ class Window(object):
             self.do_export()
 
     def do_slots(self):
-        """实例二级面板：选实例，再新建 / 换号 / 启动 / 停止 / 删除。"""
+        """实例面板：GUI / CLI 当前登录与切换，以及命名实例的一组动作。"""
+        gui = (self.current.get("nickname") or self.current.get("uid", "")[:8]
+               or "未登录")
+        cli = (self.cli_cur.get("nickname") or self.cli_cur.get("uid", "")[:8]
+               or "未登录")
         pending = {"action": "", "slot": self.slot_sel}
 
         def pick(name):
-            """面板里的一个实例动作：记下选择与动作并关面板。"""
+            """面板里的一个动作：记下实例与动作并关闭面板。"""
             def callback(form):
                 label = str(form.values().get("slot") or "")
                 pending["slot"] = next(
@@ -1490,17 +1477,20 @@ class Window(object):
         Form.open(self.root, "实例",
                   [{"key": "slot", "label": "实例",
                     "choices": self.slot_labels or ["（无实例）"],
-                    "value": self.slot_var.get() if hasattr(self, "slot_var") else ""}],
-                  submit="关闭",
-                  buttons=(("新建", pick("new")), ("换号", pick("switch")),
+                    "value": self.slot_var.get()}],
+                  note="GUI：%s　CLI：%s" % (gui, cli), submit="关闭",
+                  buttons=(("切换 GUI", pick("gui")), ("切换 CLI", pick("cli")),
+                           ("新建", pick("new")), ("换号", pick("switch")),
                            ("启动", pick("launch")), ("停止", pick("stop")),
                            ("删除", pick("remove"))))
         action = pending["action"]
-        if action:
+        if action in ("switch", "launch", "stop", "remove"):
             self.slot_sel = pending["slot"]
-        {"new": self.slot_new, "switch": self.slot_switch, "launch": self.slot_launch,
-         "stop": self.slot_stop, "remove": self.slot_remove}.get(
-            action, lambda: None)()
+        {"gui": self.switch_desktop, "cli": self.switch_cli,
+         "new": self.slot_new, "switch": self.slot_switch,
+         "launch": self.slot_launch, "stop": self.slot_stop,
+         "remove": self.slot_remove}.get(action, lambda: None)()
+
 
     def _auto_renew(self):
         """剩余 3 天以内的凭证自动续期，结果写日志。"""
