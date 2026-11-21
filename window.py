@@ -1,9 +1,11 @@
-"""主窗口：国内版 / 国际版两页，右侧控制区随页切换，日志两页共用。
+"""主窗口：国内版 / 国际版 / 全部三页，右侧控制区随页切换，日志三页共用。
 
 国内版页只列国内版账号，只给成长体系（签到 / 活跃 / 任务 / 旅行 / 管家）与积分包
-明细；国际版页只列国际版账号，只给 GUI / CLI 两个登录槽位的切换、会话同步与凭证
-续期。没有弹窗：确认、进度、结果、错误全部实时写进日志。PAD / GAP / COLS / SIDE_W /
-BTN_PAD 是控制区网格的尺寸约定：卡片左右边距、按钮间隙、列数、右栏宽度与按钮留白。
+明细；国际版页只列国际版账号，只给 GUI / CLI 两个登录槽位的切换、会话同步、凭证
+续期与试用；全部页把两区账号并进一张表，管注册、导入、导出、体检、统计、定时与
+清理。除了输入表单（form.py），没有弹窗：确认、进度、结果、错误全部实时写进日志。
+PAD / GAP / COLS / SIDE_W / BTN_PAD 是控制区网格的尺寸约定：卡片左右边距、按钮间隙、
+列数、右栏宽度与按钮留白。
 """
 import datetime
 import os
@@ -37,7 +39,7 @@ BTN_PAD = 3
 
 
 class Theme:
-    """配色与 ttk 样式：两页共用同一套控件外观。"""
+    """配色与 ttk 样式：三页共用同一套控件外观。"""
 
     BG = "#f3f4f6"
     PANEL = "#ffffff"
@@ -203,7 +205,7 @@ class Tip:
 
 
 class Page(object):
-    """一页的全部控件与列定义（两页结构相同，列与功能区不同）。"""
+    """一页的全部控件与列定义（三页结构相同，列与功能区不同）。"""
 
     def __init__(self, realm, columns, titles, widths, actions):
         """记下列定义与按钮动作，控件在构建时再挂上来。"""
@@ -220,10 +222,10 @@ class Page(object):
 
 
 class Window(object):
-    """主窗口：两页账号表 + 右栏控制区 + 共用日志。"""
+    """主窗口：三页账号表 + 右栏控制区 + 共用日志。"""
 
     def __init__(self, root):
-        """准备数据容器与两页控件，随后载入账号并启动日志泵。"""
+        """准备数据容器与三页控件，随后载入账号、起定时线程并启动日志泵。"""
         self.root = root
         self.store = Store()
         self.entries = []
@@ -275,7 +277,7 @@ class Window(object):
         return widget
 
     def _build_body(self, parent):
-        """建两页的列表与右栏，默认显示国内版。"""
+        """建三页的列表与右栏，默认显示国内版。"""
         body = tk.Frame(parent, bg=Theme.BG)
         body.grid(row=0, column=0, sticky="nsew", padx=12, pady=(10, 0))
         body.columnconfigure(0, weight=1)
@@ -513,7 +515,7 @@ class Window(object):
         self.log_text.tag_configure("err", foreground=Theme.ERR)
 
     def switch_page(self, key):
-        """切到国内版 / 国际版页：只显示该页的控件，另一页整块隐藏。"""
+        """切到国内版 / 国际版 / 全部页：只显示该页的控件，另两页整块隐藏。"""
         if key not in self.pages:
             return
         self.page = key
@@ -709,7 +711,7 @@ class Window(object):
         self.refresh_tree()
 
     def refresh_tree(self):
-        """重画两页：各自表格、计数与选中集都保持独立，切页时不用再补数据。"""
+        """重画三页：各自表格、计数与选中集都保持独立，切页时不用再补数据。"""
         for key in self.pages:
             self._refresh_page(self.pages[key])
         self.refresh_packs()
